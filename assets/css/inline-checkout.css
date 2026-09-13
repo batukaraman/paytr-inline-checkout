@@ -1,0 +1,473 @@
+/* ==========================================================================
+   PayTR Inline Checkout — akordeon (.payment_box) içi kart formu
+   Varsayılan renk paleti örnek amaçlıdır; sitenizin tema renklerine göre
+   aşağıdaki değişkenleri (#1c1c1c / #fbf9f5 / #e2dacd) düzenleyebilirsiniz.
+
+   NOT: Temanın genel `input[type="text"]` / `input[type="checkbox"]` kuralları
+   (forms.css) `!important` kullanıyor ve buraya sızabiliyor. Bu yüzden TÜM
+   seçiciler `#paytr-inline-mount` ID'siyle başlıyor — iyzico inline eklentisinin
+   kendi CSS'inde de aynı teknik kullanılıyor (bkz. o eklentinin dosyası).
+   ========================================================================== */
+
+#paytr-inline-mount {
+	margin-top: 12px;
+}
+
+#paytr-inline-mount .paytr-inline-hint {
+	margin: 10px 0 0;
+	padding: 12px 14px;
+	border-radius: 8px;
+	font-size: 13px;
+	line-height: 1.5;
+	background: #fbf9f5;
+	border: 1px dashed #d4c9b3;
+	color: #6b6357;
+}
+
+#paytr-inline-mount .paytr-inline-error {
+	margin: 10px 0 0;
+	padding: 12px 14px;
+	border-radius: 8px;
+	font-size: 13px;
+	line-height: 1.5;
+	background: #fef2f2;
+	border: 1px solid #fecaca;
+	color: #991b1b;
+}
+
+/* --- "Sandbox" test modu şeridi — iyzico'nun test bandıyla aynı dil --- */
+#paytr-inline-mount .paytr-inline-sandbox {
+	margin-bottom: 10px;
+	padding: 10px 14px;
+	border-radius: 8px;
+	background: #f4eee5;
+	color: #6b6357;
+	border: 1px solid #e2dacd;
+	font-size: 13px;
+	text-align: center;
+}
+
+/* --- Kart alanları: iyzico'nun TEK bağlı kutusu — dıştan tek çerçeve/köşe,
+   satırlar arası ince ayraç, ikonlu tek satır alanlar. --- */
+#paytr-inline-mount .paytr-inline-card {
+	border: 1px solid #e2dacd;
+	border-radius: 10px;
+	background-color: #fbf9f5;
+	overflow: hidden;
+	margin-bottom: 10px;
+	box-shadow: 0 1px 2px rgba( 28, 28, 28, 0.03 );
+}
+
+#paytr-inline-mount .paytr-inline-field {
+	position: relative;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 12px 14px;
+}
+
+#paytr-inline-mount .paytr-inline-field + .paytr-inline-field,
+#paytr-inline-mount .paytr-inline-row {
+	border-top: 1px solid #e2dacd;
+}
+
+#paytr-inline-mount .paytr-inline-row {
+	display: flex;
+}
+
+#paytr-inline-mount .paytr-inline-row .paytr-inline-field {
+	flex: 1 1 50%;
+	min-width: 0;
+	border-top: 0;
+}
+
+#paytr-inline-mount .paytr-inline-row .paytr-inline-field--cvc {
+	border-left: 1px solid #e2dacd;
+}
+
+#paytr-inline-mount .paytr-inline-icon {
+	flex: 0 0 auto;
+	color: #9a9184;
+}
+
+#paytr-inline-mount .paytr-inline-icon--cvc-card {
+	position: absolute;
+	right: 12px;
+	top: 50%;
+	transform: translateY( -50% );
+	color: #c3b89f;
+}
+
+/* Temanın forms.css'inin sızan çerçeve/köşe/zemin/iç boşluğunu iptal et. */
+#paytr-inline-mount .paytr-inline-field input[type="text"] {
+	width: 100%;
+	border: 0 !important;
+	border-radius: 0 !important;
+	background-color: transparent !important;
+	box-shadow: none !important;
+	padding: 0 !important;
+	margin: 0 !important;
+	min-height: 0 !important;
+	height: auto !important;
+	font-size: 15px;
+	line-height: 1.4;
+	color: #1c1c1c;
+	min-width: 0;
+}
+
+#paytr-inline-mount .paytr-inline-field input[type="text"]:focus {
+	outline: none !important;
+	box-shadow: none !important;
+	background-color: transparent !important;
+}
+
+#paytr-inline-mount .paytr-inline-field input::placeholder {
+	color: #a1a1aa;
+	opacity: 1;
+}
+
+#paytr-inline-mount .paytr-inline-card-brand {
+	position: absolute;
+	right: 14px;
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: #71717a;
+}
+
+/* --- Taksit tablosu — iyzico "Installment" satırlarıyla aynı görsel dil --- */
+#paytr-inline-mount .paytr-inline-installments-heading {
+	margin: 0 0 6px;
+	font-size: 13px;
+	font-weight: 600;
+	color: #1c1c1c;
+}
+
+#paytr-inline-mount .paytr-inline-installments-heading[hidden] {
+	display: none !important;
+}
+
+#paytr-inline-mount .paytr-inline-installments {
+	margin-top: 2px;
+	margin-bottom: 10px;
+	border: 1px solid #e2dacd;
+	border-radius: 10px;
+	overflow: hidden;
+	background: #fff;
+}
+
+#paytr-inline-mount .paytr-inline-installments-placeholder {
+	margin: 0;
+	padding: 14px;
+	font-size: 12.5px;
+	line-height: 1.5;
+	color: #9a9184;
+	text-align: center;
+	background: #fbf9f5;
+}
+
+#paytr-inline-mount .paytr-inline-installment-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 10px 12px;
+	font-size: 13px;
+	color: #1c1c1c;
+	cursor: pointer;
+}
+
+#paytr-inline-mount .paytr-inline-installment-row + .paytr-inline-installment-row {
+	border-top: 1px solid #f1f3f5;
+}
+
+#paytr-inline-mount .paytr-inline-installment-row .paytr-inline-radio {
+	width: 18px;
+	height: 18px;
+	min-width: 18px;
+	border-radius: 50%;
+	border: 1px solid #d4d4d8;
+	background: #fbf9f5;
+	position: relative;
+	flex: 0 0 auto;
+}
+
+#paytr-inline-mount .paytr-inline-installment-row.is-selected .paytr-inline-radio {
+	border-color: #1c1c1c;
+	background: #1c1c1c;
+}
+
+#paytr-inline-mount .paytr-inline-installment-row.is-selected .paytr-inline-radio::after {
+	content: "";
+	position: absolute;
+	inset: 4px;
+	border-radius: 50%;
+	background: #fbf9f5;
+}
+
+#paytr-inline-mount .paytr-inline-installment-row .paytr-inline-installment-label {
+	flex: 1 1 auto;
+}
+
+#paytr-inline-mount .paytr-inline-installment-row.is-selected .paytr-inline-installment-label,
+#paytr-inline-mount .paytr-inline-installment-row.is-selected .paytr-inline-installment-total {
+	font-weight: 600;
+}
+
+#paytr-inline-mount .paytr-inline-installment-row .paytr-inline-installment-total {
+	color: #52525b;
+	font-variant-numeric: tabular-nums;
+}
+
+/* --- 3D Secure overlay: tam ekran/merkezi modal, siteden çıkmadan --- */
+#paytr-inline-mount .paytr-inline-3ds-overlay {
+	position: fixed;
+	inset: 0;
+	z-index: 100000;
+	background: rgba( 28, 28, 28, 0.55 );
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 16px;
+}
+
+#paytr-inline-mount .paytr-inline-3ds-overlay[hidden] {
+	display: none !important;
+}
+
+#paytr-inline-mount .paytr-inline-3ds-box {
+	position: relative;
+	width: 100%;
+	max-width: 460px;
+	height: min(640px, 90vh);
+	background: #fff;
+	border-radius: 12px;
+	overflow: hidden;
+	box-shadow: 0 20px 60px rgba( 0, 0, 0, 0.35 );
+}
+
+#paytr-inline-mount .paytr-inline-3ds-box iframe {
+	width: 100%;
+	height: 100%;
+	border: 0;
+	display: block;
+}
+
+#paytr-inline-mount .paytr-inline-3ds-close {
+	position: absolute;
+	top: 6px;
+	right: 8px;
+	z-index: 1;
+	width: 30px;
+	height: 30px;
+	border: 0 !important;
+	border-radius: 50%;
+	background: rgba( 28, 28, 28, 0.06 ) !important;
+	color: #1c1c1c;
+	font-size: 18px;
+	line-height: 1;
+	cursor: pointer;
+	box-shadow: none !important;
+}
+
+#paytr-inline-mount .paytr-inline-3ds-loading {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 10px;
+	font-size: 13px;
+	color: #52525b;
+	background: #fff;
+}
+
+.paytr-inline-spinner {
+	width: 22px;
+	height: 22px;
+	border: 3px solid rgba( 28, 28, 28, 0.15 );
+	border-top-color: #1c1c1c;
+	border-radius: 50%;
+	animation: paytr-inline-spin 0.7s linear infinite;
+	flex: 0 0 auto;
+}
+
+@keyframes paytr-inline-spin {
+	to {
+		transform: rotate( 360deg );
+	}
+}
+
+/* --- 3D Secure göstergesi — iyzico'nun boş kutulu onay satırıyla aynı dil.
+   Ödeme her zaman 3D Secure ile işlendiği için bu kutunun durumu ödemeyi
+   etkilemez; yine de gerçek/tıklanabilir bir checkbox (iyzico'daki gibi). --- */
+#paytr-inline-mount .paytr-inline-3dsrow {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 10px;
+	font-size: 13px;
+	color: #1c1c1c;
+	cursor: pointer;
+}
+
+#paytr-inline-mount .paytr-inline-3dsrow-box {
+	appearance: none !important;
+	-webkit-appearance: none !important;
+	box-sizing: border-box !important;
+	display: inline-flex !important;
+	align-items: center;
+	justify-content: center;
+	width: 16px !important;
+	height: 16px !important;
+	min-height: 0 !important;
+	margin: 0 !important;
+	padding: 0 !important;
+	border: 1px solid #d4d4d8 !important;
+	border-radius: 3px !important;
+	background: #fff !important;
+	box-shadow: none !important;
+	flex: 0 0 auto;
+	cursor: pointer;
+}
+
+#paytr-inline-mount .paytr-inline-3dsrow-box:checked {
+	background: #1c1c1c !important;
+	border-color: #1c1c1c !important;
+}
+
+#paytr-inline-mount .paytr-inline-3dsrow-box:checked::after {
+	content: "";
+	display: block;
+	width: 4px;
+	height: 8px;
+	margin-top: -3px;
+	border: solid #fbf9f5;
+	border-width: 0 2px 2px 0;
+	transform: rotate( 45deg );
+}
+
+#paytr-inline-mount .paytr-inline-3dsrow-label {
+	font-weight: 400;
+}
+
+#paytr-inline-mount .paytr-inline-3dsrow-info {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 16px;
+	height: 16px;
+	border-radius: 50%;
+	border: 1px solid #d4d4d8;
+	color: #71717a;
+	font-size: 10px;
+	font-style: italic;
+	font-family: Georgia, 'Times New Roman', serif;
+	cursor: help;
+	flex: 0 0 auto;
+}
+
+/* --- Güven satırı — iyzico'nun "iyzico güvencesi ile kartımı sakla" satırıyla
+   aynı ritim (ikon + kalın marka adı + metin), ama gerçek bir kart-saklama
+   özelliği olmadığı için o iddiayı taşımıyor. --- */
+#paytr-inline-mount .paytr-inline-trustrow {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 12px;
+	font-size: 13px;
+	color: #52525b;
+}
+
+#paytr-inline-mount .paytr-inline-trustrow-icon {
+	display: inline-flex;
+	flex: 0 0 auto;
+	color: #1c1c1c;
+}
+
+#paytr-inline-mount .paytr-inline-trustrow strong {
+	color: #1c1c1c;
+}
+
+#paytr-inline-mount .paytr-inline-trustrow-brand {
+	display: inline-block !important;
+	float: none !important;
+	height: 14px !important;
+	width: auto !important;
+	max-width: none !important;
+	margin: 0 !important;
+	vertical-align: -2px;
+}
+
+/* --- Onay metni — iyzico'nun KVKK satırıyla aynı dil (kutu yok, düz metin) --- */
+#paytr-inline-mount .paytr-inline-consent {
+	margin: 0 0 12px;
+	font-size: 11.5px;
+	line-height: 1.5;
+	color: #9a9184;
+}
+
+#paytr-inline-mount .paytr-inline-consent a {
+	color: #1c1c1c;
+	text-decoration: underline;
+}
+
+/* --- "Tüm Taksit Seçeneklerini Göster" + genişletilmiş tam tablo --- */
+#paytr-inline-mount .paytr-inline-showall {
+	display: block;
+	width: 100%;
+	margin: 0 0 4px;
+	padding: 4px 0;
+	border: 0 !important;
+	background: transparent !important;
+	box-shadow: none !important;
+	color: #1c1c1c;
+	font-size: 12.5px;
+	font-weight: 600;
+	text-align: center;
+	text-decoration: underline;
+	cursor: pointer;
+}
+
+#paytr-inline-mount .paytr-inline-allrates {
+	margin-bottom: 8px;
+	border: 1px solid #e2dacd;
+	border-radius: 10px;
+	overflow: hidden;
+	background: #fff;
+	font-size: 12.5px;
+}
+
+#paytr-inline-mount .paytr-inline-allrates[hidden] {
+	display: none !important;
+}
+
+#paytr-inline-mount .paytr-inline-allrates-brand {
+	padding: 8px 12px;
+	background: #fbf9f5;
+	font-weight: 600;
+	color: #1c1c1c;
+	border-top: 1px solid #e2dacd;
+}
+
+#paytr-inline-mount .paytr-inline-allrates-brand:first-child {
+	border-top: 0;
+}
+
+#paytr-inline-mount .paytr-inline-allrates-row {
+	display: flex;
+	justify-content: space-between;
+	padding: 6px 12px;
+	color: #52525b;
+}
+
+#paytr-inline-mount .paytr-inline-allrates-row + .paytr-inline-allrates-row {
+	border-top: 1px solid #f1f3f5;
+}
+
+@media ( max-width: 400px ) {
+	#paytr-inline-mount .paytr-inline-3ds-box {
+		max-width: 100%;
+		height: 85vh;
+	}
+}
