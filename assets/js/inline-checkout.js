@@ -15,7 +15,14 @@
 		start: function () {
 			var $form = $( 'form.checkout' );
 
-			$form.on( 'checkout_place_order_' + CFG.method, this.onPlaceOrder.bind( this ) );
+			// order-pay sayfasında ("Öde" ile gelinen sipariş ödeme
+			// sayfası) form.checkout yok — o sayfada gönderimi WooCommerce'in
+			// kendi order-pay AJAX'ı yönetir, biz yalnızca kart alanlarını
+			// checkout ile birebir aynı (biçimlendirme, BIN/taksit önizleme)
+			// tutmak için aşağıdaki dinleyicileri bağlıyoruz.
+			if ( $form.length ) {
+				$form.on( 'checkout_place_order_' + CFG.method, this.onPlaceOrder.bind( this ) );
+			}
 
 			$( document ).on( 'input', '#paytr_card_number', this.onCardNumberInput.bind( this ) );
 			$( document ).on( 'input', '#paytr_expiry', this.onExpiryInput.bind( this ) );
@@ -55,11 +62,11 @@
 			this.lastBin = bin;
 			var self = this;
 
-			$.post( CFG.ajaxUrl, {
+			$.post( CFG.ajaxUrl, $.extend( {
 				action: 'paytr_inline_bin',
 				nonce: CFG.nonce,
 				bin: bin
-			} ).done( function ( res ) {
+			}, orderContext() ) ).done( function ( res ) {
 				if ( bin !== self.lastBin ) {
 					return; // kullanıcı yazmaya devam etti, eski yanıtı yok say
 				}
@@ -142,10 +149,10 @@
 			}
 
 			$btn.prop( 'disabled', true );
-			$.post( CFG.ajaxUrl, {
+			$.post( CFG.ajaxUrl, $.extend( {
 				action: 'paytr_inline_all_rates',
 				nonce: CFG.nonce
-			} ).done( function ( res ) {
+			}, orderContext() ) ).done( function ( res ) {
 				$btn.prop( 'disabled', false );
 				if ( res && res.success && res.data.brands && ! res.data.brands.length ) {
 					// İstek başarılı ama hiç taksit seçeneği yok (ör. sektörel BDDK
@@ -466,6 +473,15 @@
 		$( '.woocommerce-error, .woocommerce-message, .woocommerce-NoticeGroup' ).remove();
 	}
 
+	/* order-pay sayfasında sepet olmadığından BIN/taksit sorgularının doğru
+	   tutarı hesaplayabilmesi için sipariş kimliğini de AJAX'a ekliyoruz. */
+	function orderContext() {
+		if ( ! CFG.orderId ) {
+			return {};
+		}
+		return { order_id: CFG.orderId, order_key: CFG.orderKey };
+	}
+
 	function formatMoney( n ) {
 		try {
 			return new Intl.NumberFormat( 'tr-TR', { style: 'currency', currency: 'TRY' } ).format( n );
@@ -503,7 +519,7 @@
 	}
 
 	$( function () {
-		if ( ! CFG.method || ! $( 'form.checkout' ).length ) {
+		if ( ! CFG.method || ! $( MOUNT ).length ) {
 			return;
 		}
 		App.start();

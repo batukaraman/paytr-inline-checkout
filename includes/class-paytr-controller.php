@@ -100,12 +100,16 @@ class Controller {
 		);
 
 		// order-pay sayfası ayrı bir form/AJAX ucu kullanır (#order_review,
-		// checkout_order_pay) ve 3D Secure'ü tam sayfa yönlendirmeyle
-		// gösterir (bkz. render_3ds_fullpage) — bu yüzden inline JS'i (BIN
-		// sorgulama, iframe/AJAX akışı) orada YÜKLEMİYORUZ; kart alanları
-		// düz HTML form olarak, CSS'le birlikte, JS'siz de çalışır.
+		// checkout_order_pay). Kartı GÖNDEREN kısmı (onPlaceOrder) o formu
+		// tanımadığı için hiç bağlanmıyor — WooCommerce'in kendi order-pay
+		// AJAX'ı process_payment()'ı normal şekilde çağırıyor ve 3D
+		// Secure'ü tam sayfa yönlendirmeyle gösteriyoruz (render_3ds_fullpage).
+		// Ama kart numarası biçimlendirme, marka/BIN tespiti ve taksit
+		// tablosu gibi JS'e dayalı UI'ı checkout ile BİREBİR aynı tutmak
+		// için bu betiği order-pay'de de yüklüyoruz.
+		$order_id_for_pay = 0;
 		if ( is_wc_endpoint_url( 'order-pay' ) ) {
-			return;
+			$order_id_for_pay = absint( get_query_var( 'order-pay' ) );
 		}
 
 		wp_enqueue_script(
@@ -116,11 +120,17 @@ class Controller {
 			true
 		);
 
+		$order_for_pay = $order_id_for_pay ? wc_get_order( $order_id_for_pay ) : false;
+
 		wp_localize_script( 'paytr-inline-checkout', 'paytrInline', array(
 			'ajaxUrl'     => admin_url( 'admin-ajax.php' ),
 			'checkoutUrl' => class_exists( 'WC_AJAX' ) ? \WC_AJAX::get_endpoint( 'checkout' ) : wc_get_checkout_url(),
 			'nonce'       => wp_create_nonce( 'paytr_inline' ),
 			'method'      => Gateway::ID,
+			// order-pay sayfasında sepet yok; BIN/taksit sorgularının
+			// doğru tutarı hesaplayabilmesi için sipariş kimliğini yolluyoruz.
+			'orderId'     => $order_for_pay ? $order_for_pay->get_id() : 0,
+			'orderKey'    => $order_for_pay ? $order_for_pay->get_order_key() : '',
 			'i18n'    => array(
 				'needFields'   => __( 'Kart bilgilerinizi girin.', 'paytr-inline-checkout' ),
 				'invalidCard'  => __( 'Kart numarası geçersiz görünüyor.', 'paytr-inline-checkout' ),
@@ -213,7 +223,21 @@ class Controller {
 		wp_send_json_success( array( 'brands' => $out ) );
 	}
 
+	/**
+	 * order-pay sayfasında sepet boştur (sipariş zaten oluşturulmuş) — bu
+	 * yüzden JS, taksit önizlemesinin doğru tutarı hesaplayabilmesi için
+	 * order_id/order_key'i de AJAX isteğine ekliyor. Geçerliyse sipariş
+	 * toplamını, yoksa sepet toplamını kullanıyoruz.
+	 */
 	protected function cart_total() {
+		$order_id = isset( $_POST['order_id'] ) ? absint( $_POST['order_id'] ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Missing
+		$key      = isset( $_POST['order_key'] ) ? sanitize_text_field( wp_unslash( $_POST['order_key'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Missing
+		if ( $order_id && $key ) {
+			$order = wc_get_order( $order_id );
+			if ( $order && hash_equals( $order->get_order_key(), $key ) ) {
+				return (float) $order->get_total();
+			}
+		}
 		return ! empty( WC()->cart ) ? (float) WC()->cart->get_total( 'edit' ) : 0;
 	}
 

@@ -152,10 +152,13 @@ class Gateway extends \WC_Payment_Gateway {
 		$s         = $this->api_settings();
 		$test_mode = ! empty( $s['test_mode'] ) && 'yes' === $s['test_mode'];
 
-		// order-pay sayfasında inline JS yüklenmiyor (bkz. Controller::enqueue) —
-		// yalnızca JS ile çalışan taksit-tümünü-göster ve iframe modalını
-		// atlıyoruz; kart alanları ve tek çekim gönderimi JS'siz de çalışır.
-		$has_js = ! ( function_exists( 'is_wc_endpoint_url' ) && is_wc_endpoint_url( 'order-pay' ) );
+		// order-pay sayfasında ("Öde" ile gelinen sipariş ödeme sayfası)
+		// checkout ile BİREBİR aynı kart UI'ı (biçimlendirme, BIN/taksit
+		// önizleme) için JS orada da yükleniyor (bkz. Controller::enqueue) —
+		// yalnızca 3D Secure'ü inline gösteren iframe/modal'ı atlıyoruz,
+		// çünkü o sayfada gönderim WooCommerce'in kendi order-pay AJAX'ı
+		// üzerinden tam sayfa yönlendirmeyle sonuçlanıyor (render_3ds_fullpage).
+		$is_pay_page = function_exists( 'is_wc_endpoint_url' ) && is_wc_endpoint_url( 'order-pay' );
 
 		$kvkk_page = get_page_by_path( 'kvkk-politikasi' );
 		$kvkk_url  = $kvkk_page ? get_permalink( $kvkk_page ) : home_url( '/kvkk-politikasi/' );
@@ -247,14 +250,14 @@ class Gateway extends \WC_Payment_Gateway {
 				?>
 			</p>
 
-			<?php if ( $has_js && $has_installments ) : ?>
+			<?php if ( $has_installments ) : ?>
 				<button type="button" class="paytr-inline-showall" id="paytr-inline-showall">
 					<?php esc_html_e( 'Tüm Taksit Seçeneklerini Göster', 'paytr-inline-checkout' ); ?>
 				</button>
 				<div class="paytr-inline-allrates" id="paytr-inline-allrates" hidden></div>
 			<?php endif; ?>
 
-			<?php if ( $has_js ) : ?>
+			<?php if ( ! $is_pay_page ) : ?>
 				<div class="paytr-inline-3ds-overlay" id="paytr-inline-3ds-overlay" hidden>
 					<div class="paytr-inline-3ds-box">
 						<button type="button" class="paytr-inline-3ds-close" aria-label="<?php esc_attr_e( 'Kapat', 'paytr-inline-checkout' ); ?>">&times;</button>
@@ -402,6 +405,17 @@ class Gateway extends \WC_Payment_Gateway {
 			wc_add_notice( $result->get_error_message(), 'error' );
 			$order->add_order_note( sprintf( __( 'PayTR isteği başarısız: %s', 'paytr-inline-checkout' ), $result->get_error_message() ) );
 			return array( 'result' => 'failure' );
+		}
+
+		// Müşteri daha önce reddedilmiş/başarısız bir siparişi (ör. "Başarısız"
+		// durumunda) aynı sepetle tekrar deniyorsa, sipariş HÂLÂ o eski
+		// durumda duruyor olabilir. Yeni deneme için 3DS modalı açılır
+		// açılmaz JS durum yoklamaya (ajax_status) başlıyor — sipariş hâlâ
+		// "failed" görünüyorsa bu YENİ denemeyi de yanlışlıkla anında
+		// reddedilmiş sanıp modalı kapatıyordu. Yeni bir PayTR isteği
+		// başarıyla atıldığına göre siparişi "ödeme bekliyor"a döndürüyoruz.
+		if ( $order->has_status( array( 'failed', 'cancelled' ) ) ) {
+			$order->update_status( 'pending', __( 'PayTR: yeni bir ödeme denemesi başlatıldı.', 'paytr-inline-checkout' ) );
 		}
 
 		$order->update_meta_data( '_paytr_inline_pending', 'yes' );

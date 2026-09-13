@@ -21,7 +21,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'PAYTR_INLINE_VER', '1.0.0' );
+define( 'PAYTR_INLINE_VER', '1.1.0' );
 define( 'PAYTR_INLINE_FILE', __FILE__ );
 define( 'PAYTR_INLINE_DIR', plugin_dir_path( __FILE__ ) );
 define( 'PAYTR_INLINE_URL', plugin_dir_url( __FILE__ ) );
