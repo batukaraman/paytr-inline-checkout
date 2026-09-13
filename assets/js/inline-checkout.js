@@ -300,13 +300,13 @@
 				order_key: orderKey
 			} ).done( function ( res ) {
 				if ( ! res || ! res.success || ! res.data || ! res.data.html ) {
-					self.render3dsError( res && res.data && res.data.message ? res.data.message : CFG.i18n.generic );
+					self.failPayment( res && res.data && res.data.message ? res.data.message : CFG.i18n.generic );
 					return;
 				}
 				self.render3ds( res.data.html );
 				self.beginPolling( orderId, orderKey );
 			} ).fail( function () {
-				self.render3dsError( CFG.i18n.generic );
+				self.failPayment( CFG.i18n.generic );
 			} );
 		},
 
@@ -366,22 +366,38 @@
 			}
 		},
 
-		render3dsError: function ( msg ) {
-			var $overlay = $( '#paytr-inline-3ds-overlay' );
-			$overlay.find( '.paytr-inline-3ds-loading' ).remove();
-			$overlay.find( '.paytr-inline-3ds-box' ).append(
-				'<div class="paytr-inline-3ds-loading"><span>' + escapeHtml( msg ) + '</span></div>'
-			);
+		/* Kalıcı/başarısız bir sonuç (ret, zaman aşımı, ağ hatası vb.): modalı
+		   TAMAMEN kapatıp kullanıcıyı doğrudan checkout sayfasına (ki zaten
+		   altında duruyor) döndürüyoruz ve normal WooCommerce hata kutusunu
+		   (renderNotice) gösteriyoruz. renderNotice zaten "checkout_error"
+		   olayını tetikliyor — bu da temanın sabit "Sipariş Ver" proxy
+		   butonunu (navigation.js) yeniden aktif ediyor; aksi hâlde buton
+		   3D Secure sonrası kalıcı olarak devre dışı kalıyordu. */
+		failPayment: function ( msg ) {
+			this.closeModalOnly();
+			this.paying = false;
+			this.unblock( $( 'form.checkout' ) );
+			this.renderNotice( [ msg || CFG.i18n.generic ] );
+			this.scrollToTop();
 		},
 
-		close3ds: function () {
+		closeModalOnly: function () {
+			this.stopPolling();
 			$( '#paytr-inline-3ds-overlay' ).prop( 'hidden', true );
 			var frame = document.getElementById( 'paytr-inline-3ds-frame' );
 			if ( frame ) {
+				frame.onload = null;
 				frame.srcdoc = 'about:blank';
 			}
-			this.stopPolling();
+		},
+
+		/* Kullanıcı × ile modalı kendi isteğiyle kapatırsa da aynı temizliği
+		   yapıyoruz ki "Sipariş Ver" tekrar denenebilir kalsın. */
+		close3ds: function () {
+			this.closeModalOnly();
 			this.paying = false;
+			this.unblock( $( 'form.checkout' ) );
+			$( document.body ).trigger( 'checkout_error' );
 		},
 
 		/* ---- 3DS tamamlanınca gerçek sonucu PayTR'nin bildirimi belirler;
@@ -393,8 +409,7 @@
 
 			this.pollTimer = setInterval( function () {
 				if ( Date.now() > self.pollDeadline ) {
-					self.stopPolling();
-					self.render3dsError( CFG.i18n.timeout );
+					self.failPayment( CFG.i18n.timeout );
 					return;
 				}
 				$.post( CFG.ajaxUrl, {
@@ -408,10 +423,11 @@
 					}
 					if ( 'paid' === res.data.status ) {
 						self.stopPolling();
+						self.closeModalOnly();
+						self.block( $( 'form.checkout' ) );
 						window.location = res.data.redirect;
 					} else if ( 'failed' === res.data.status ) {
-						self.stopPolling();
-						self.render3dsError( CFG.i18n.declined );
+						self.failPayment( CFG.i18n.declined );
 					}
 				} );
 			}, 2500 );

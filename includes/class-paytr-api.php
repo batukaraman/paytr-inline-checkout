@@ -147,7 +147,11 @@ class Api {
 		unset( $params['card_number'], $params['cvv'], $params['expiry_month'], $params['expiry_year'], $params['cc_owner'], $card );
 
 		if ( is_wp_error( $response ) ) {
-			return $response;
+			// Ham cURL/DNS hatasını (ör. "cURL error 28: Resolving timed out...")
+			// müşteriye asla göstermiyoruz — teknik detay log'a, müşteriye genel
+			// ve nazik bir mesaj.
+			error_log( 'PayTR Inline: charge isteği başarısız (bağlantı): ' . $response->get_error_message() ); // phpcs:ignore
+			return new \WP_Error( 'paytr_connection', __( 'PayTR sunucusuna şu anda ulaşılamıyor. Lütfen birkaç dakika sonra tekrar deneyin.', 'paytr-inline-checkout' ) );
 		}
 
 		$code = wp_remote_retrieve_response_code( $response );
@@ -168,9 +172,15 @@ class Api {
 	public function merchant_oid( \WC_Order $order ) {
 		$attempt = (int) $order->get_meta( '_paytr_attempt' ) + 1;
 		$order->update_meta_data( '_paytr_attempt', $attempt );
-		$order->save_meta_data();
 		$oid = 'WC' . $order->get_id() . 'A' . $attempt . wp_generate_password( 4, false, false );
-		return preg_replace( '/[^A-Za-z0-9]/', '', $oid );
+		$oid = preg_replace( '/[^A-Za-z0-9]/', '', $oid );
+		// Bu siparişteki EN GÜNCEL deneme hangisi — bildirim (webhook) bunu
+		// karşılaştırıp önceki/iptal edilmiş bir denemeden geç gelen bir
+		// sonucun, o sırada devam eden YENİ bir denemeyi geçersiz kılmasını
+		// engelliyor (bkz. Controller::handle_notify).
+		$order->update_meta_data( '_paytr_last_oid', $oid );
+		$order->save_meta_data();
+		return $oid;
 	}
 
 	/**
@@ -210,7 +220,8 @@ class Api {
 		) );
 
 		if ( is_wp_error( $response ) ) {
-			return $response;
+			error_log( 'PayTR Inline: BIN sorgulama başarısız (bağlantı): ' . $response->get_error_message() ); // phpcs:ignore
+			return new \WP_Error( 'paytr_connection', __( 'PayTR sunucusuna şu anda ulaşılamıyor.', 'paytr-inline-checkout' ) );
 		}
 
 		$data = json_decode( wp_remote_retrieve_body( $response ), true );
@@ -252,7 +263,8 @@ class Api {
 		) );
 
 		if ( is_wp_error( $response ) ) {
-			return $response;
+			error_log( 'PayTR Inline: taksit oranları isteği başarısız (bağlantı): ' . $response->get_error_message() ); // phpcs:ignore
+			return new \WP_Error( 'paytr_connection', __( 'PayTR sunucusuna şu anda ulaşılamıyor.', 'paytr-inline-checkout' ) );
 		}
 
 		$data = json_decode( wp_remote_retrieve_body( $response ), true );

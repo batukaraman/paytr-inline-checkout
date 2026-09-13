@@ -327,7 +327,19 @@ class Controller {
 			exit;
 		}
 
-		$order = $this->find_order_by_oid( (string) ( $post['merchant_oid'] ?? '' ) );
+		$oid   = (string) ( $post['merchant_oid'] ?? '' );
+		$order = $this->find_order_by_oid( $oid );
+
+		if ( $order && $this->is_stale_notification( $order, $oid ) ) {
+			// Müşteri bir siparişi birden fazla kez denediğinde, ÖNCEKİ
+			// (iptal edilmiş/reddedilmiş) bir denemeye ait geç gelen bir
+			// bildirim, o sırada devam eden YENİ bir denemenin sonucunu
+			// yanlışlıkla geçersiz kılabilir. Hash geçerli (gerçekten
+			// PayTR'den) ama bu artık güncel deneme değil — yok sayıyoruz.
+			error_log( 'PayTR Inline: eski (güncel olmayan) deneme bildirimi yok sayıldı, oid=' . $oid ); // phpcs:ignore
+			echo 'OK';
+			exit;
+		}
 
 		if ( $order ) {
 			if ( 'success' === ( $post['status'] ?? '' ) ) {
@@ -384,6 +396,21 @@ class Controller {
 		}
 		$expected = (int) round( (float) $order->get_total() * 100 );
 		return abs( $expected - $reported ) > 2; // 2 kuruşluk yuvarlama payı.
+	}
+
+	/**
+	 * Bildirimdeki merchant_oid, siparişin EN SON ürettiği denemeyle
+	 * (Api::merchant_oid içinde kaydedilen _paytr_last_oid) eşleşmiyorsa bu
+	 * bildirim eskidir — müşteri aynı siparişi birden fazla kez denediğinde
+	 * (ör. iptal edip tekrar denediğinde) önceki denemeye ait geç gelen bir
+	 * sonucun güncel denemeyi ezmesini engeller. _paytr_last_oid meta'sı
+	 * yoksa (eski sipariş/geriye dönük uyumluluk) katı reddetme yapılmaz.
+	 *
+	 * @return bool true ise bildirim eski/güncel olmayan bir denemeye ait.
+	 */
+	protected function is_stale_notification( \WC_Order $order, $oid ) {
+		$last = (string) $order->get_meta( '_paytr_last_oid' );
+		return $last && $oid && $last !== $oid;
 	}
 
 	/* ------------------------------------------------------------------ */
