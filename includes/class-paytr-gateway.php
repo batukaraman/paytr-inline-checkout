@@ -152,14 +152,6 @@ class Gateway extends \WC_Payment_Gateway {
 		$s         = $this->api_settings();
 		$test_mode = ! empty( $s['test_mode'] ) && 'yes' === $s['test_mode'];
 
-		// order-pay sayfasında ("Öde" ile gelinen sipariş ödeme sayfası)
-		// checkout ile BİREBİR aynı kart UI'ı (biçimlendirme, BIN/taksit
-		// önizleme) için JS orada da yükleniyor (bkz. Controller::enqueue) —
-		// yalnızca 3D Secure'ü inline gösteren iframe/modal'ı atlıyoruz,
-		// çünkü o sayfada gönderim WooCommerce'in kendi order-pay AJAX'ı
-		// üzerinden tam sayfa yönlendirmeyle sonuçlanıyor (render_3ds_fullpage).
-		$is_pay_page = function_exists( 'is_wc_endpoint_url' ) && is_wc_endpoint_url( 'order-pay' );
-
 		$kvkk_page = get_page_by_path( 'kvkk-politikasi' );
 		$kvkk_url  = $kvkk_page ? get_permalink( $kvkk_page ) : home_url( '/kvkk-politikasi/' );
 
@@ -257,14 +249,12 @@ class Gateway extends \WC_Payment_Gateway {
 				<div class="paytr-inline-allrates" id="paytr-inline-allrates" hidden></div>
 			<?php endif; ?>
 
-			<?php if ( ! $is_pay_page ) : ?>
-				<div class="paytr-inline-3ds-overlay" id="paytr-inline-3ds-overlay" hidden>
-					<div class="paytr-inline-3ds-box">
-						<button type="button" class="paytr-inline-3ds-close" aria-label="<?php esc_attr_e( 'Kapat', 'paytr-inline-checkout' ); ?>">&times;</button>
-						<iframe id="paytr-inline-3ds-frame" title="3D Secure"></iframe>
-					</div>
+			<div class="paytr-inline-3ds-overlay" id="paytr-inline-3ds-overlay" hidden>
+				<div class="paytr-inline-3ds-box">
+					<button type="button" class="paytr-inline-3ds-close" aria-label="<?php esc_attr_e( 'Kapat', 'paytr-inline-checkout' ); ?>">&times;</button>
+					<iframe id="paytr-inline-3ds-frame" title="3D Secure"></iframe>
 				</div>
-			<?php endif; ?>
+			</div>
 		</div>
 		<?php
 	}
@@ -386,10 +376,23 @@ class Gateway extends \WC_Payment_Gateway {
 		// "Ödemesi bekleyen"/"Başarısız" bir siparişte müşteri "Öde"ye
 		// tıklayınca gelinen order-pay sayfasında WooCommerce bu gizli alanı
 		// ekler (bkz. WC çekirdek şablonu templates/checkout/form-pay.php).
-		// O sayfa checkout'tan farklı bir form/AJAX ucu (#order_review,
-		// checkout_order_pay) kullandığından inline JS'imiz orada çalışmaz;
-		// bu yüzden 3D Secure'ü tam sayfa yönlendirmeyle gösteriyoruz.
 		$is_pay_page = ! empty( $_POST['woocommerce_pay'] ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
+
+		// order-pay'in JS'i (inline-checkout.js) #order_review'ın gönderimini
+		// yakalayıp kendi AJAX ucumuza (paytr_inline_pay_order) postalıyor —
+		// bu durumda checkout ile AYNI inline 3D Secure modal/iframe akışını
+		// kullanabiliriz. JS hiç çalışmamışsa (nadir, JS kapalı senaryosu)
+		// WooCommerce burayı normal bir tam sayfa POST olarak çağırır; o
+		// zaman tam sayfa yönlendirmeye düşüyoruz — çünkü o senaryoda
+		// modal/iframe'i tetikleyecek bir JS zaten yok.
+		//
+		// Tam sayfa yönlendirme ayrıca artık ikinci bir sebeple daha kaçınılan
+		// yol: PayTR'nin geri dönüşü bazen çapraz-site bir POST ile oluyor;
+		// tarayıcı (SameSite=Lax) böyle bir istekte oturum çerezini
+		// eklemeyebiliyor ve order-pay yanlışlıkla "giriş yapmanız
+		// gerekiyor" gösteriyordu. İnline iframe akışında bu adım PayTR'nin
+		// kendi iframe'i içinde kalır, üst sayfanın oturumu hiç sınanmaz.
+		$use_fullpage_fallback = $is_pay_page && ! wp_doing_ajax();
 
 		$ok_url   = $order->get_checkout_order_received_url();
 		$fail_url = $is_pay_page
@@ -426,7 +429,7 @@ class Gateway extends \WC_Payment_Gateway {
 
 		set_transient( 'paytr_3ds_' . $order_id . '_' . $order->get_order_key(), $result['html'], 15 * MINUTE_IN_SECONDS );
 
-		if ( $is_pay_page ) {
+		if ( $use_fullpage_fallback ) {
 			return array(
 				'result'   => 'success',
 				'redirect' => add_query_arg(

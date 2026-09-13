@@ -38,6 +38,13 @@ class Controller {
 		add_action( 'wp_ajax_paytr_inline_all_rates', array( $this, 'ajax_all_rates' ) );
 		add_action( 'wp_ajax_nopriv_paytr_inline_all_rates', array( $this, 'ajax_all_rates' ) );
 
+		// order-pay sayfasında ("Öde" ile gelinen sipariş ödeme sayfası)
+		// #order_review'ın gönderimini JS burada yakalar — WooCommerce'in
+		// normal (tam sayfa POST/yönlendirme) order-pay akışı yerine, 3D
+		// Secure'ü checkout'taki AYNI inline modal/iframe ile göstermek için.
+		add_action( 'wp_ajax_paytr_inline_pay_order', array( $this, 'ajax_pay_order' ) );
+		add_action( 'wp_ajax_nopriv_paytr_inline_pay_order', array( $this, 'ajax_pay_order' ) );
+
 		// PayTR Mağaza Paneli -> Bildirim URL: /?wc-api=paytr_inline_notify
 		add_action( 'woocommerce_api_paytr_inline_notify', array( $this, 'handle_notify' ) );
 
@@ -300,6 +307,80 @@ class Controller {
 			return $a['count'] <=> $b['count'];
 		} );
 		return $installments;
+	}
+
+	/* ------------------------------------------------------------------ */
+	/*  AJAX: order-pay ("Öde") sayfasının gönderimi                      */
+	/* ------------------------------------------------------------------ */
+
+	/**
+	 * WooCommerce'in normal order-pay akışı (WC_Form_Handler::pay_action())
+	 * tam sayfa bir POST + wp_redirect() ile çalışır. Bunun yerine bu uç,
+	 * AYNI doğrulamaları yapıp process_payment()'ı çağırır ve sonucu JSON
+	 * olarak döner — böylece order-pay sayfası da checkout ile aynı inline
+	 * 3D Secure modal/iframe akışını kullanabilir.
+	 *
+	 * Neden: tam sayfa yönlendirmede PayTR'nin geri dönüşü bazen çapraz-site
+	 * bir POST ile oluyor; tarayıcı (SameSite=Lax) o istekte oturum çerezini
+	 * göndermeyebiliyor, bu da order-pay'in "giriş yapmanız gerekiyor"
+	 * uyarısını yanlışlıkla göstermesine yol açıyordu. İnline iframe akışında
+	 * bu son adım PayTR'nin kendi ACS/iframe'i içinde kalır; üst sayfa (ve
+	 * onun geçerli oturumu) hiç yeniden istenmez.
+	 *
+	 * @see \WC_Form_Handler::pay_action()
+	 */
+	public function ajax_pay_order() {
+		check_ajax_referer( 'paytr_inline', 'nonce' );
+
+		$order_id = isset( $_POST['order_id'] ) ? absint( $_POST['order_id'] ) : 0;
+		$key      = isset( $_POST['order_key'] ) ? sanitize_text_field( wp_unslash( $_POST['order_key'] ) ) : '';
+		$order    = $order_id ? wc_get_order( $order_id ) : false;
+
+		if ( ! $order || ! hash_equals( $order->get_order_key(), $key ) ) {
+			wp_send_json( array( 'result' => 'failure', 'messages' => '<ul class="woocommerce-error"><li>' . esc_html__( 'Sipariş doğrulanamadı.', 'paytr-inline-checkout' ) . '</li></ul>' ) );
+		}
+
+		if ( ! current_user_can( 'pay_for_order', $order_id ) ) {
+			wp_send_json( array( 'result' => 'failure', 'messages' => '<ul class="woocommerce-error"><li>' . esc_html__( 'Ödeme formuna devam etmek için lütfen hesabınıza giriş yapınız.', 'paytr-inline-checkout' ) . '</li></ul>' ) );
+		}
+
+		if ( ! $order->needs_payment() ) {
+			wp_send_json( array(
+				'result'   => 'success',
+				'redirect' => $order->get_checkout_order_received_url(),
+			) );
+		}
+
+		$payment_method_id  = isset( $_POST['payment_method'] ) ? wc_clean( wp_unslash( $_POST['payment_method'] ) ) : '';
+		$available_gateways = WC()->payment_gateways()->get_available_payment_gateways();
+		$gateway            = isset( $available_gateways[ $payment_method_id ] ) ? $available_gateways[ $payment_method_id ] : null;
+
+		if ( ! $gateway ) {
+			wp_send_json( array( 'result' => 'failure', 'messages' => '<ul class="woocommerce-error"><li>' . esc_html__( 'Geçersiz ödeme yöntemi.', 'paytr-inline-checkout' ) . '</li></ul>' ) );
+		}
+
+		$order->set_payment_method( $gateway );
+		$order->save();
+
+		$gateway->validate_fields();
+
+		if ( wc_notice_count( 'error' ) > 0 ) {
+			wp_send_json( array(
+				'result'   => 'failure',
+				'messages' => wc_print_notices( true ),
+			) );
+		}
+
+		$result = $gateway->process_payment( $order_id );
+
+		if ( ! isset( $result['result'] ) || 'success' !== $result['result'] ) {
+			wp_send_json( array(
+				'result'   => 'failure',
+				'messages' => wc_print_notices( true ),
+			) );
+		}
+
+		wp_send_json( apply_filters( 'woocommerce_payment_successful_result', $result, $order_id ) );
 	}
 
 	/* ------------------------------------------------------------------ */

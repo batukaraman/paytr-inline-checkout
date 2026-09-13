@@ -14,14 +14,20 @@
 
 		start: function () {
 			var $form = $( 'form.checkout' );
+			var $payForm = $( '#order_review' );
 
-			// order-pay sayfasında ("Öde" ile gelinen sipariş ödeme
-			// sayfası) form.checkout yok — o sayfada gönderimi WooCommerce'in
-			// kendi order-pay AJAX'ı yönetir, biz yalnızca kart alanlarını
-			// checkout ile birebir aynı (biçimlendirme, BIN/taksit önizleme)
-			// tutmak için aşağıdaki dinleyicileri bağlıyoruz.
+			// order-pay sayfasında ("Öde" ile gelinen sipariş ödeme sayfası)
+			// form.checkout yok, #order_review var. Orada da 3D Secure'ü
+			// checkout'taki AYNI inline modal/iframe akışıyla göstermek için
+			// (tam sayfa yönlendirme yerine — PayTR'nin geri dönüşü bazen
+			// çapraz-site bir POST ile olduğundan, tam sayfa yönlendirmede
+			// tarayıcı oturum çerezini bu isteğe eklemeyip "giriş yapmanız
+			// gerekiyor" hatasına yol açabiliyordu) formun gönderimini kendimiz
+			// yakalayıp kendi AJAX ucumuza (paytr_inline_pay_order) POST ediyoruz.
 			if ( $form.length ) {
 				$form.on( 'checkout_place_order_' + CFG.method, this.onPlaceOrder.bind( this ) );
+			} else if ( $payForm.length ) {
+				$payForm.on( 'submit', this.onPayOrderSubmit.bind( this ) );
 			}
 
 			$( document ).on( 'input', '#paytr_card_number', this.onCardNumberInput.bind( this ) );
@@ -34,6 +40,14 @@
 
 		$mount: function () {
 			return $( MOUNT );
+		},
+
+		/* Checkout sayfasında form.checkout, order-pay sayfasında #order_review —
+		   block/unblock ve hata mesajı gösterimi bu ikisinden hangisi varsa onu
+		   hedefler. */
+		activeForm: function () {
+			var $form = $( 'form.checkout' );
+			return $form.length ? $form : $( '#order_review' );
 		},
 
 		selected: function () {
@@ -227,28 +241,7 @@
 			var self = this;
 			$.post( CFG.checkoutUrl, $form.serialize() )
 				.done( function ( raw ) {
-					var res = parseJson( raw );
-
-					if ( res && res.result === 'success' && res.redirect && res.redirect.indexOf( '#paytr-inline-3ds' ) !== -1 ) {
-						var parts = res.redirect.split( '|' );
-						self.startPayment( parts[ 1 ], parts[ 2 ] );
-						return;
-					}
-
-					self.paying = false;
-					self.unblock( $form );
-
-					if ( res && res.result === 'success' && res.redirect ) {
-						window.location = res.redirect;
-						return;
-					}
-
-					if ( res && ( res.messages || res.message ) ) {
-						self.renderRawMessages( res.messages || res.message );
-					} else {
-						self.renderNotice( [ CFG.i18n.generic ] );
-					}
-					self.scrollToTop();
+					self.handleSubmitResponse( parseJson( raw ) );
 				} )
 				.fail( function () {
 					self.paying = false;
@@ -258,6 +251,67 @@
 				} );
 
 			return false;
+		},
+
+		/* ---- order-pay sayfası ("Öde" ile gelinen sipariş ödeme sayfası):
+		   #order_review'ın normal (JS'siz) gönderimi WooCommerce'i tam sayfa
+		   yönlendirmeye zorlar; onun yerine aynı checkout akışını (inline
+		   modal/iframe) kullanmak için formu kendi AJAX ucumuza gönderiyoruz. ---- */
+		onPayOrderSubmit: function ( e ) {
+			if ( ! this.selected() ) {
+				return true;
+			}
+			if ( this.paying ) {
+				e.preventDefault();
+				return false;
+			}
+			e.preventDefault();
+
+			var $form = $( '#order_review' );
+			this.paying = true;
+			this.block( $form );
+
+			var extra = $.param( $.extend( { action: 'paytr_inline_pay_order', nonce: CFG.nonce }, orderContext() ) );
+
+			var self = this;
+			$.post( CFG.ajaxUrl, $form.serialize() + '&' + extra )
+				.done( function ( raw ) {
+					self.handleSubmitResponse( parseJson( raw ) );
+				} )
+				.fail( function () {
+					self.paying = false;
+					self.unblock( $form );
+					self.renderNotice( [ CFG.i18n.generic ] );
+					self.scrollToTop();
+				} );
+
+			return false;
+		},
+
+		/* onPlaceOrder ve onPayOrderSubmit'in ortak sonuç işleyicisi. */
+		handleSubmitResponse: function ( res ) {
+			var $form = this.activeForm();
+
+			if ( res && res.result === 'success' && res.redirect && res.redirect.indexOf( '#paytr-inline-3ds' ) !== -1 ) {
+				var parts = res.redirect.split( '|' );
+				this.startPayment( parts[ 1 ], parts[ 2 ] );
+				return;
+			}
+
+			this.paying = false;
+			this.unblock( $form );
+
+			if ( res && res.result === 'success' && res.redirect ) {
+				window.location = res.redirect;
+				return;
+			}
+
+			if ( res && ( res.messages || res.message ) ) {
+				this.renderRawMessages( res.messages || res.message );
+			} else {
+				this.renderNotice( [ CFG.i18n.generic ] );
+			}
+			this.scrollToTop();
 		},
 
 		block: function ( $form ) {
@@ -272,7 +326,7 @@
 		},
 
 		scrollToTop: function () {
-			var $t = $( 'form.checkout' );
+			var $t = this.activeForm();
 			if ( $t.length ) {
 				$( 'html, body' ).animate( { scrollTop: $t.offset().top - 100 }, 300 );
 			}
@@ -281,7 +335,7 @@
 		renderRawMessages: function ( messages ) {
 			var $wrap = $( '<div/>' ).html( messages );
 			removeNotices();
-			$( 'form.checkout' ).prepend( $wrap );
+			this.activeForm().prepend( $wrap );
 			this.reenablePlaceOrderButtons();
 			$( document.body ).trigger( 'checkout_error', [ messages ] );
 		},
@@ -293,7 +347,7 @@
 			} );
 			html += '</ul>';
 			removeNotices();
-			$( 'form.checkout' ).prepend( html );
+			this.activeForm().prepend( html );
 			this.reenablePlaceOrderButtons();
 			$( document.body ).trigger( 'checkout_error', [ html ] );
 		},
@@ -305,7 +359,7 @@
 
 			if ( ! orderId || ! orderKey ) {
 				self.paying = false;
-				self.unblock( $( 'form.checkout' ) );
+				self.unblock( self.activeForm() );
 				self.renderNotice( [ CFG.i18n.generic ] );
 				return;
 			}
@@ -331,7 +385,7 @@
 		},
 
 		show3dsLoading: function () {
-			this.unblock( $( 'form.checkout' ) ); // form artık overlay arkasında; kilitli tutmaya gerek yok
+			this.unblock( this.activeForm() ); // form artık overlay arkasında; kilitli tutmaya gerek yok
 			var $overlay = $( '#paytr-inline-3ds-overlay' );
 			$overlay.prop( 'hidden', false );
 			var $box = $overlay.find( '.paytr-inline-3ds-box' );
@@ -378,7 +432,7 @@
 						frameEl.srcdoc = 'about:blank';
 					}
 					$( '#paytr-inline-3ds-overlay' ).prop( 'hidden', true );
-					this.block( $( 'form.checkout' ) );
+					this.block( this.activeForm() );
 					window.location = href;
 				}
 			} catch ( e ) {
@@ -396,7 +450,7 @@
 		failPayment: function ( msg ) {
 			this.closeModalOnly();
 			this.paying = false;
-			this.unblock( $( 'form.checkout' ) );
+			this.unblock( this.activeForm() );
 			this.renderNotice( [ msg || CFG.i18n.generic ] );
 			this.reenablePlaceOrderButtons();
 			this.scrollToTop();
@@ -434,7 +488,7 @@
 		close3ds: function () {
 			this.closeModalOnly();
 			this.paying = false;
-			this.unblock( $( 'form.checkout' ) );
+			this.unblock( this.activeForm() );
 			this.reenablePlaceOrderButtons();
 			$( document.body ).trigger( 'checkout_error' );
 		},
@@ -463,7 +517,7 @@
 					if ( 'paid' === res.data.status ) {
 						self.stopPolling();
 						self.closeModalOnly();
-						self.block( $( 'form.checkout' ) );
+						self.block( self.activeForm() );
 						window.location = res.data.redirect;
 					} else if ( 'failed' === res.data.status ) {
 						self.failPayment( CFG.i18n.declined );
