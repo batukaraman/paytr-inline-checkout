@@ -147,6 +147,12 @@
 				nonce: CFG.nonce
 			} ).done( function ( res ) {
 				$btn.prop( 'disabled', false );
+				if ( res && res.success && res.data.brands && ! res.data.brands.length ) {
+					// İstek başarılı ama hiç taksit seçeneği yok (ör. sektörel BDDK
+					// kısıtı) — bu bir hata değil, bilgilendirici bir durum.
+					$box.html( '<p class="paytr-inline-allrates-row">' + escapeHtml( CFG.i18n.noInstallments ) + '</p>' ).prop( 'hidden', false );
+					return;
+				}
 				if ( ! res || ! res.success || ! res.data.brands || ! res.data.brands.length ) {
 					var msg = ( res && res.data && res.data.message ) ? res.data.message : CFG.i18n.generic;
 					$box.html( '<p class="paytr-inline-allrates-row">' + escapeHtml( msg ) + '</p>' ).prop( 'hidden', false );
@@ -317,11 +323,46 @@
 		},
 
 		render3ds: function ( html ) {
+			var self = this;
 			var $overlay = $( '#paytr-inline-3ds-overlay' );
 			$overlay.find( '.paytr-inline-3ds-loading' ).remove();
 			var frame = document.getElementById( 'paytr-inline-3ds-frame' );
 			if ( frame ) {
+				frame.onload = function () {
+					self.checkFrameEscaped( frame );
+				};
 				frame.srcdoc = html;
+			}
+		},
+
+		/* 3D Secure tamamlandığında PayTR/banka ACS sayfası bazen üst pencereyi
+		   değil, KENDİ iframe'ini merchant_ok_url/fail_url adresimize yönlendirir
+		   — bu durumda sonuç sayfası modalin içinde sıkışmış görünür, kapanmaz.
+		   Iframe aynı-origin (bizim sitemiz) bir adrese geçtiği anda bunu
+		   yakalayıp üst pencereyi biz yönlendiriyoruz; farklı origin (PayTR/ACS)
+		   sırasında erişim güvenlik nedeniyle engellenir, bu normaldir ve yok sayılır. */
+		checkFrameEscaped: function ( frame ) {
+			try {
+				var href = frame.contentWindow.location.href;
+				if ( href && href.indexOf( window.location.origin ) === 0 ) {
+					this.stopPolling();
+					// Hedef sayfanın modal içinde bir an görünmesini (flash)
+					// tamamen engellemek için modali anında KAPATIYORUZ (iframe'i
+					// boşaltıp overlay'i gizliyoruz — bir üst katman eklemek
+					// yerine, çünkü iframe'in "load" anında zaten render olmuş
+					// içeriği bir sonraki boyama karesinde görünebiliyordu).
+					// Yerine "Siparişi Ver"e basılınca çıkan aynı tam sayfa
+					// işleniyor animasyonunu (blockUI) gösteriyoruz.
+					var frameEl = document.getElementById( 'paytr-inline-3ds-frame' );
+					if ( frameEl ) {
+						frameEl.srcdoc = 'about:blank';
+					}
+					$( '#paytr-inline-3ds-overlay' ).prop( 'hidden', true );
+					this.block( $( 'form.checkout' ) );
+					window.location = href;
+				}
+			} catch ( e ) {
+				// Farklı origin (PayTR/ACS) — beklenen durum, yok say.
 			}
 		},
 

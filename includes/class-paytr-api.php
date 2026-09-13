@@ -76,7 +76,11 @@ class Api {
 		$currency_map = array( 'TRY' => 'TL', 'USD' => 'USD', 'EUR' => 'EUR', 'GBP' => 'GBP', 'RUB' => 'RUB' );
 		$currency     = $currency_map[ get_woocommerce_currency() ] ?? 'TL';
 
-		$amount_kurus = (int) round( (float) $order->get_total() * 100 );
+		// ÖNEMLİ: PayTR Direkt API'de payment_amount ondalıklı DÜZ tutardır
+		// (ör. "133.66"), kuruş cinsinden tam sayı DEĞİL. Bu alanı ×100 olarak
+		// göndermek PayTR'ye 100 kat fazla tutar talep ettirir (bkz. test
+		// ekranında "13366 TL" görünmesi — asıl hatanın kanıtı).
+		$payment_amount = number_format( (float) $order->get_total(), 2, '.', '' );
 
 		$basket = array();
 		foreach ( $order->get_items() as $item ) {
@@ -84,6 +88,16 @@ class Api {
 				wp_strip_all_tags( $item->get_name() ),
 				number_format( (float) ( $item->get_total() / max( 1, $item->get_quantity() ) ), 2, '.', '' ),
 				$item->get_quantity(),
+			);
+		}
+		// Taksit vade farkı gibi ücretler (process_payment tarafından eklenir)
+		// sepet toplamının gönderilen tutarla (payment_amount) uyuşması için
+		// basket'e de yansıtılır.
+		foreach ( $order->get_items( 'fee' ) as $fee_item ) {
+			$basket[] = array(
+				wp_strip_all_tags( $fee_item->get_name() ),
+				number_format( (float) $fee_item->get_total(), 2, '.', '' ),
+				1,
 			);
 		}
 		if ( ! $basket ) {
@@ -97,7 +111,7 @@ class Api {
 			'user_ip'            => substr( (string) $client_ip, 0, 39 ),
 			'merchant_oid'       => $this->merchant_oid( $order ),
 			'email'              => substr( (string) $order->get_billing_email(), 0, 100 ),
-			'payment_amount'     => $amount_kurus,
+			'payment_amount'     => $payment_amount,
 			'payment_type'       => 'card',
 			'installment_count'  => max( 0, (int) $installment ),
 			'currency'           => $currency,
@@ -251,6 +265,25 @@ class Api {
 
 		set_transient( $cache_key, $data, 30 * MINUTE_IN_SECONDS );
 		return $data;
+	}
+
+	/**
+	 * Taksitli tutarı PayTR'nin belirttiği "peşin fiyatına taksit" formülüyle
+	 * hesaplar: TAKSİTLİ TOPLAM = TUTAR / ((100 - ORAN%) / 100).
+	 * Direkt API'de PayTR komisyonu kendisi eklemez — vade farkını tutara
+	 * ekleyip göndermek üye işyerinin sorumluluğundadır (bkz. PayTR desteğinin
+	 * doğrulaması). Basit bir "tutar * (1 + oran/100)" yaklaşımı YANLIŞTIR.
+	 *
+	 * @param float $base_total Taksitsiz (peşin) tutar.
+	 * @param float $pct        Yüzde cinsinden vade farkı oranı.
+	 * @return float
+	 */
+	public static function gross_up( $base_total, $pct ) {
+		$pct = (float) $pct;
+		if ( $pct <= 0 || $pct >= 100 ) {
+			return round( (float) $base_total, 2 );
+		}
+		return round( (float) $base_total / ( ( 100 - $pct ) / 100 ), 2 );
 	}
 
 	/**

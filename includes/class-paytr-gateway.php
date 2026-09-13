@@ -154,6 +154,23 @@ class Gateway extends \WC_Payment_Gateway {
 
 		$kvkk_page = get_page_by_path( 'kvkk-politikasi' );
 		$kvkk_url  = $kvkk_page ? get_permalink( $kvkk_page ) : home_url( '/kvkk-politikasi/' );
+
+		// Bazı hesaplarda (ör. BDDK taksit yasası kapsamındaki sektörler) PayTR
+		// taksit oranı servisini başarıyla ama tamamen boş döner. Bu durumda
+		// "Tüm Taksit Seçeneklerini Göster" bağlantısını hiç göstermiyoruz —
+		// tıklanınca yanlışlıkla hata gibi görünen boş bir sonuç vermesindense.
+		$has_installments = false;
+		$rates            = ( new Api( $s ) )->installment_rates();
+		if ( ! is_wp_error( $rates ) && ! empty( $rates['oranlar'] ) ) {
+			foreach ( (array) $rates['oranlar'] as $brand_rates ) {
+				foreach ( (array) $brand_rates as $count => $rate ) {
+					if ( (int) $count >= 2 && (float) $rate > 0 ) {
+						$has_installments = true;
+						break 2;
+					}
+				}
+			}
+		}
 		?>
 		<div id="paytr-inline-mount" class="paytr-inline-mount" data-state="idle">
 			<?php if ( $test_mode ) : ?>
@@ -201,11 +218,11 @@ class Gateway extends \WC_Payment_Gateway {
 				</p>
 			</div>
 
-			<label class="paytr-inline-3dsrow" for="paytr_3ds_display">
-				<input type="checkbox" id="paytr_3ds_display" class="paytr-inline-3dsrow-box" />
+			<div class="paytr-inline-3dsrow">
+				<span class="paytr-inline-3dsrow-box" aria-hidden="true"></span>
 				<span class="paytr-inline-3dsrow-label"><?php esc_html_e( '3D Secure', 'paytr-inline-checkout' ); ?></span>
-				<span class="paytr-inline-3dsrow-info" tabindex="0" title="<?php esc_attr_e( 'Bu ödeme her zaman 3D Secure ile, kart bilgileriniz sunucumuzda saklanmadan doğrudan PayTR üzerinden işlenir. Bu kutunun işaretli olup olmaması ödemeyi etkilemez.', 'paytr-inline-checkout' ); ?>">i</span>
-			</label>
+				<span class="paytr-inline-3dsrow-info" tabindex="0" title="<?php esc_attr_e( 'Bu ödeme her zaman 3D Secure ile, kart bilgileriniz sunucumuzda saklanmadan doğrudan PayTR üzerinden işlenir. Bu bir seçenek değil, her ödemede zorunlu olarak uygulanır.', 'paytr-inline-checkout' ); ?>">i</span>
+			</div>
 
 			<div class="paytr-inline-trustrow">
 				<span class="paytr-inline-trustrow-icon" aria-hidden="true"><?php echo $this->icon( 'shield' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?></span>
@@ -225,10 +242,12 @@ class Gateway extends \WC_Payment_Gateway {
 				?>
 			</p>
 
-			<button type="button" class="paytr-inline-showall" id="paytr-inline-showall">
-				<?php esc_html_e( 'Tüm Taksit Seçeneklerini Göster', 'paytr-inline-checkout' ); ?>
-			</button>
-			<div class="paytr-inline-allrates" id="paytr-inline-allrates" hidden></div>
+			<?php if ( $has_installments ) : ?>
+				<button type="button" class="paytr-inline-showall" id="paytr-inline-showall">
+					<?php esc_html_e( 'Tüm Taksit Seçeneklerini Göster', 'paytr-inline-checkout' ); ?>
+				</button>
+				<div class="paytr-inline-allrates" id="paytr-inline-allrates" hidden></div>
+			<?php endif; ?>
 
 			<div class="paytr-inline-3ds-overlay" id="paytr-inline-3ds-overlay" hidden>
 				<div class="paytr-inline-3ds-box">
@@ -304,6 +323,32 @@ class Gateway extends \WC_Payment_Gateway {
 		$last4 = substr( preg_replace( '/\D/', '', (string) $card['number'] ), -4 );
 
 		$api = new Api( $this->api_settings() );
+
+		// PayTR Direkt API'de komisyonu PayTR eklemez; "peşin fiyatına taksit"
+		// mantığıyla vade farkını tutara EKLEYİP göndermek üye işyerinin
+		// sorumluluğudur (bkz. PayTR desteğinin doğruladığı formül). Seçilen
+		// taksit sayısı için vade farkını hesaplayıp siparişe ücret olarak
+		// ekliyoruz ki hem müşteri gerçek tutarı görsün hem de PayTR'ye
+		// gönderilen tutar (order->get_total()) doğru olsun.
+		if ( $installment >= 2 && $card['brand'] ) {
+			$rates = $api->installment_rates();
+			$pct   = ! is_wp_error( $rates ) ? (float) ( $rates['oranlar'][ $card['brand'] ][ $installment ] ?? 0 ) : 0;
+			if ( $pct > 0 ) {
+				$base  = (float) $order->get_total();
+				$gross = Api::gross_up( $base, $pct );
+				$diff  = round( $gross - $base, 2 );
+				if ( $diff > 0 ) {
+					$fee = new \WC_Order_Item_Fee();
+					/* translators: %d: taksit sayısı */
+					$fee->set_name( sprintf( __( 'Taksit vade farkı (%d taksit)', 'paytr-inline-checkout' ), $installment ) );
+					$fee->set_amount( $diff );
+					$fee->set_total( $diff );
+					$order->add_item( $fee );
+					$order->calculate_totals( false );
+					$order->save();
+				}
+			}
+		}
 
 		$ok_url   = $order->get_checkout_order_received_url();
 		$fail_url = add_query_arg( array( 'paytr_failed' => $order_id ), wc_get_checkout_url() );

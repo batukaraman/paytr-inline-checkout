@@ -121,6 +121,7 @@ class Controller {
 				'generic'      => __( 'Bir hata oluştu. Lütfen tekrar deneyin.', 'paytr-inline-checkout' ),
 				'noInstallment'=> __( 'Tek Çekim', 'paytr-inline-checkout' ),
 				'installmentsPlaceholder' => __( 'Taksit seçenekleri kart numaranızı girdikten sonra görünecektir.', 'paytr-inline-checkout' ),
+				'noInstallments' => __( 'Bu mağaza için herhangi bir taksit seçeneği bulunmamaktadır.', 'paytr-inline-checkout' ),
 			),
 		) );
 	}
@@ -227,9 +228,10 @@ class Controller {
 	}
 
 	/**
-	 * "oranlar" PayTR panelinde tanımlı komisyon yüzdesidir (vade farkı).
-	 * PayTR günlük güncellenen resmi oranları döndürür; burada sadece
-	 * müşteriye taksit başına düşen tutarı göstermek için uyguluyoruz.
+	 * "oranlar" PayTR panelinde tanımlı vade farkı yüzdesidir. Direkt API'de
+	 * PayTR komisyonu kendisi eklemez — üye işyeri "peşin fiyatına taksit"
+	 * mantığıyla tutarı kendisi şişirip göndermek zorundadır (bkz. Api::gross_up,
+	 * PayTR desteğinin doğruladığı formül: TUTAR / ((100-ORAN%)/100)).
 	 */
 	protected function compute_installments( array $rates, $brand, $total ) {
 		$installments = array();
@@ -242,7 +244,7 @@ class Controller {
 				continue;
 			}
 			$pct       = (float) $rate;
-			$grand     = round( $total * ( 1 + $pct / 100 ), 2 );
+			$grand     = Api::gross_up( $total, $pct );
 			$per_month = round( $grand / $count, 2 );
 			$installments[] = array(
 				'count'    => $count,
