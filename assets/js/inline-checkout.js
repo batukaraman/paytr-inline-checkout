@@ -53,6 +53,13 @@
 			} else {
 				this.clearInstallments();
 			}
+
+			// Kart numarası tamamlanınca (yazarak ya da yapıştırarak) SKT
+			// alanına otomatik geç. Amex 15, diğer markalar 16 hane.
+			var isAmex = /^3[47]/.test( digits );
+			if ( digits.length >= ( isAmex ? 15 : 16 ) ) {
+				focusNext( '#paytr_expiry' );
+			}
 		},
 
 		maybeLookupBin: function ( bin ) {
@@ -191,6 +198,10 @@
 			$el.val( display );
 			$( '#paytr_expiry_month' ).val( digits.slice( 0, 2 ) );
 			$( '#paytr_expiry_year' ).val( digits.slice( 2, 4 ) );
+
+			if ( digits.length >= 4 ) {
+				focusNext( '#paytr_cvv' );
+			}
 		},
 
 		onDigitsOnly: function ( e ) {
@@ -471,6 +482,15 @@
 
 	function removeNotices() {
 		$( '.woocommerce-error, .woocommerce-message, .woocommerce-NoticeGroup' ).remove();
+	}
+
+	/* Bir kart alanı tamamlanınca (yazarak ya da yapıştırarak) sıradaki
+	   alana otomatik odaklanır — zaten o alandaysa veya alan yoksa yok sayar. */
+	function focusNext( selector ) {
+		var el = document.querySelector( selector );
+		if ( el && document.activeElement !== el ) {
+			el.focus();
+		}
 	}
 
 	/* order-pay sayfasında sepet olmadığından BIN/taksit sorgularının doğru
