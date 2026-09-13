@@ -30,7 +30,7 @@ class Gateway extends \WC_Payment_Gateway {
 
 		$this->title             = $this->get_option( 'title' );
 		$this->description       = $this->get_option( 'description' );
-		$this->icon              = $this->get_option( 'icon' );
+		$this->icon              = PAYTR_INLINE_URL . 'assets/images/paytr-logo-single.svg';
 		$this->order_button_text = $this->get_option( 'button_text' ) ?: __( 'Siparişi Ver', 'paytr-inline-checkout' );
 		$this->enabled            = $this->get_option( 'enabled', 'yes' );
 
@@ -55,11 +55,6 @@ class Gateway extends \WC_Payment_Gateway {
 				'title'       => __( 'Açıklama', 'paytr-inline-checkout' ),
 				'type'        => 'textarea',
 				'default'     => __( 'Kart bilgileriniz 3D Secure ile güvenle işlenir.', 'paytr-inline-checkout' ),
-			),
-			'icon'          => array(
-				'title'       => __( 'İkon URL', 'paytr-inline-checkout' ),
-				'type'        => 'text',
-				'default'     => '',
 			),
 			'button_text'   => array(
 				'title'       => __( 'Sipariş Butonu Metni', 'paytr-inline-checkout' ),
@@ -132,6 +127,20 @@ class Gateway extends \WC_Payment_Gateway {
 	}
 
 	/**
+	 * WooCommerce > Ayarlar > Ödemeler listesinde PayTR logosu, checkout
+	 * akordeonunda başlığın yanında ise kabul edilen kart logoları gösterilir.
+	 */
+	public function get_icon() {
+		$icon_url = ( is_admin() && ! wp_doing_ajax() )
+			? PAYTR_INLINE_URL . 'assets/images/paytr-logo-single.svg'
+			: PAYTR_INLINE_URL . 'assets/images/payment-cards.png';
+
+		$icon = '<img src="' . esc_url( $icon_url ) . '" alt="' . esc_attr( $this->get_title() ) . '" />';
+
+		return apply_filters( 'woocommerce_gateway_icon', $icon, $this->id );
+	}
+
+	/**
 	 * Akordeon içeriği: kart alanları + taksit tablosu mount noktası.
 	 * Gerçek DOM/CSS/JS assets/js/inline-checkout.js tarafından yönetilir.
 	 */
@@ -198,18 +207,10 @@ class Gateway extends \WC_Payment_Gateway {
 				<span class="paytr-inline-3dsrow-info" tabindex="0" title="<?php esc_attr_e( 'Bu ödeme her zaman 3D Secure ile, kart bilgileriniz sunucumuzda saklanmadan doğrudan PayTR üzerinden işlenir. Bu kutunun işaretli olup olmaması ödemeyi etkilemez.', 'paytr-inline-checkout' ); ?>">i</span>
 			</label>
 
-			<?php
-			$title_icon_url = trim( (string) $this->icon );
-			$title_icon_url = $title_icon_url ? strtok( $title_icon_url, " \t\n" ) : '';
-			?>
 			<div class="paytr-inline-trustrow">
 				<span class="paytr-inline-trustrow-icon" aria-hidden="true"><?php echo $this->icon( 'shield' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?></span>
 				<span>
-					<?php if ( $title_icon_url ) : ?>
-						<img class="paytr-inline-trustrow-brand" src="<?php echo esc_url( $title_icon_url ); ?>" alt="PayTR" />
-					<?php else : ?>
-						<strong><?php esc_html_e( 'PayTR', 'paytr-inline-checkout' ); ?></strong>
-					<?php endif; ?>
+					<img class="paytr-inline-trustrow-brand" src="<?php echo esc_url( PAYTR_INLINE_URL . 'assets/images/paytr-logo.svg' ); ?>" alt="PayTR" />
 					<?php esc_html_e( 'güvencesi ile korumalı ödeme.', 'paytr-inline-checkout' ); ?>
 				</span>
 			</div>
