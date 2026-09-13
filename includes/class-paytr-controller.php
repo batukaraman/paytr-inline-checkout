@@ -45,6 +45,16 @@ class Controller {
 		// çalışmadığı için 3D Secure'ü tam sayfa olarak gösteren uç.
 		add_action( 'woocommerce_api_paytr_inline_3ds_page', array( $this, 'render_3ds_fullpage' ) );
 
+		// order-pay sayfası, PayTR'nin (harici bir alan adından) tam sayfa
+		// yönlendirmesiyle geri dönüldüğünde tekrar render edilir. Bu sayfa
+		// tamamen oturuma özgüdür (hesabınıza giriş yapmış olmanız gerekir);
+		// bir önbellekleme eklentisi (ör. LiteSpeed Cache) bunu yanlışlıkla
+		// önbelleğe alırsa, sonraki tüm ziyaretçilere (veya aynı kullanıcının
+		// sonraki isteklerine) "giriş yapmanız gerekiyor" gibi eski/yanlış
+		// bir anlık görüntü sunabilir. Bu yüzden bu sayfayı kesinlikle
+		// önbelleklenmeyecek şekilde işaretliyoruz.
+		add_action( 'template_redirect', array( $this, 'prevent_order_pay_caching' ), 0 );
+
 		add_action( 'init', array( $this, 'maybe_schedule_gc' ) );
 		add_action( 'paytr_inline_gc', array( $this, 'run_gc' ) );
 	}
@@ -452,6 +462,36 @@ class Controller {
 	/* ------------------------------------------------------------------ */
 
 	/**
+	 * order-pay, kullanıcıya özel ("bu sipariş SİZE mi ait, giriş yapmış
+	 * mısınız") bir kontrolle render edilir. PayTR'den (harici bir alan
+	 * adından) tam sayfa yönlendirmeyle buraya dönüldüğünde bir önbellekleme
+	 * eklentisi bu sayfayı yanlışlıkla önbelleğe alırsa, sonraki istekler
+	 * (aynı kullanıcının sayfayı yenilemesi dahil) eski/yanlış bir anlık
+	 * görüntüyü (ör. "giriş yapmanız gerekiyor" uyarısını) görebilir. Bu
+	 * yüzden order-pay'i kesinlikle önbelleklenmeyecek şekilde işaretliyoruz.
+	 */
+	public function prevent_order_pay_caching() {
+		if ( function_exists( 'is_wc_endpoint_url' ) && is_wc_endpoint_url( 'order-pay' ) ) {
+			$this->send_no_cache_headers();
+		}
+	}
+
+	protected function send_no_cache_headers() {
+		if ( ! defined( 'DONOTCACHEPAGE' ) ) {
+			define( 'DONOTCACHEPAGE', true );
+		}
+		if ( function_exists( 'nocache_headers' ) ) {
+			nocache_headers();
+		}
+		if ( ! headers_sent() ) {
+			// LiteSpeed Cache (ve genel olarak ters proxy tabanlı önbellekler)
+			// için özel işaret — bazı sürümler yalnızca standart
+			// Cache-Control: no-store başlığına güvenmeyebiliyor.
+			header( 'X-LiteSpeed-Cache-Control: no-cache' );
+		}
+	}
+
+	/**
 	 * "Ödemesi bekleyen"/"Başarısız" bir siparişte müşteri "Öde"ye tıklayınca
 	 * gelinen order-pay sayfasında process_payment() tam sayfa 3D Secure
 	 * yönlendirmesi üretir (bkz. Gateway::process_payment). Bu uç, o
@@ -460,6 +500,8 @@ class Controller {
 	 * tam sayfa yönlendirmeyle akışı doğal olarak tamamlar.
 	 */
 	public function render_3ds_fullpage() {
+		$this->send_no_cache_headers();
+
 		$order_id = isset( $_GET['order_id'] ) ? absint( $_GET['order_id'] ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
 		$key      = isset( $_GET['key'] ) ? sanitize_text_field( wp_unslash( $_GET['key'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
 		$order    = $order_id ? wc_get_order( $order_id ) : false;
