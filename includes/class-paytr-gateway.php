@@ -152,6 +152,11 @@ class Gateway extends \WC_Payment_Gateway {
 		$s         = $this->api_settings();
 		$test_mode = ! empty( $s['test_mode'] ) && 'yes' === $s['test_mode'];
 
+		// order-pay sayfasında inline JS yüklenmiyor (bkz. Controller::enqueue) —
+		// yalnızca JS ile çalışan taksit-tümünü-göster ve iframe modalını
+		// atlıyoruz; kart alanları ve tek çekim gönderimi JS'siz de çalışır.
+		$has_js = ! ( function_exists( 'is_wc_endpoint_url' ) && is_wc_endpoint_url( 'order-pay' ) );
+
 		$kvkk_page = get_page_by_path( 'kvkk-politikasi' );
 		$kvkk_url  = $kvkk_page ? get_permalink( $kvkk_page ) : home_url( '/kvkk-politikasi/' );
 
@@ -194,7 +199,7 @@ class Gateway extends \WC_Payment_Gateway {
 				<div class="paytr-inline-row">
 					<div class="paytr-inline-field paytr-inline-field--expiry">
 						<?php echo $this->icon( 'calendar' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
-						<input type="text" id="paytr_expiry" inputmode="numeric" autocomplete="cc-exp" maxlength="5"
+						<input type="text" id="paytr_expiry" name="paytr_expiry" inputmode="numeric" autocomplete="cc-exp" maxlength="5"
 							aria-label="<?php esc_attr_e( 'Son Kullanma Tarihi', 'paytr-inline-checkout' ); ?>"
 							placeholder="<?php esc_attr_e( 'Ay / Yıl', 'paytr-inline-checkout' ); ?>" />
 						<input type="hidden" id="paytr_expiry_month" name="paytr_expiry_month" />
@@ -242,19 +247,21 @@ class Gateway extends \WC_Payment_Gateway {
 				?>
 			</p>
 
-			<?php if ( $has_installments ) : ?>
+			<?php if ( $has_js && $has_installments ) : ?>
 				<button type="button" class="paytr-inline-showall" id="paytr-inline-showall">
 					<?php esc_html_e( 'Tüm Taksit Seçeneklerini Göster', 'paytr-inline-checkout' ); ?>
 				</button>
 				<div class="paytr-inline-allrates" id="paytr-inline-allrates" hidden></div>
 			<?php endif; ?>
 
-			<div class="paytr-inline-3ds-overlay" id="paytr-inline-3ds-overlay" hidden>
-				<div class="paytr-inline-3ds-box">
-					<button type="button" class="paytr-inline-3ds-close" aria-label="<?php esc_attr_e( 'Kapat', 'paytr-inline-checkout' ); ?>">&times;</button>
-					<iframe id="paytr-inline-3ds-frame" title="3D Secure"></iframe>
+			<?php if ( $has_js ) : ?>
+				<div class="paytr-inline-3ds-overlay" id="paytr-inline-3ds-overlay" hidden>
+					<div class="paytr-inline-3ds-box">
+						<button type="button" class="paytr-inline-3ds-close" aria-label="<?php esc_attr_e( 'Kapat', 'paytr-inline-checkout' ); ?>">&times;</button>
+						<iframe id="paytr-inline-3ds-frame" title="3D Secure"></iframe>
+					</div>
 				</div>
-			</div>
+			<?php endif; ?>
 		</div>
 		<?php
 	}
@@ -280,6 +287,29 @@ class Gateway extends \WC_Payment_Gateway {
 	}
 
 	/**
+	 * SKT ay/yıl değerlerini okur. Normalde görünür "Ay/Yıl" alanını JS
+	 * (onExpiryInput) gizli paytr_expiry_month/year alanlarına bölüyor; ama
+	 * order-pay sayfasında bu JS hiç yüklenmiyor (bkz. Controller::enqueue).
+	 * O yüzden gizli alanlar boşsa, görünür "paytr_expiry" alanını ("AA/YY"
+	 * veya "AAYY") burada, sunucu tarafında da ayrıştırıyoruz.
+	 *
+	 * @return array{0:string,1:string} [ay, yıl]
+	 */
+	protected function expiry_month_year() {
+		$month = isset( $_POST['paytr_expiry_month'] ) ? preg_replace( '/\D/', '', wp_unslash( $_POST['paytr_expiry_month'] ) ) : '';
+		$year  = isset( $_POST['paytr_expiry_year'] ) ? preg_replace( '/\D/', '', wp_unslash( $_POST['paytr_expiry_year'] ) ) : '';
+
+		if ( ( ! $month || strlen( $year ) !== 2 ) && isset( $_POST['paytr_expiry'] ) ) {
+			$digits = preg_replace( '/\D/', '', wp_unslash( $_POST['paytr_expiry'] ) );
+			if ( strlen( $digits ) === 4 ) {
+				$month = substr( $digits, 0, 2 );
+				$year  = substr( $digits, 2, 2 );
+			}
+		}
+		return array( $month, $year );
+	}
+
+	/**
 	 * Kart doğrulaması PayTR'nin kendi yanıtında (3D/ret) yapılır; burada
 	 * yalnızca alanların dolu olup olmadığına bakılır ki boş kart isteği
 	 * PayTR'ye hiç gitmesin.
@@ -287,8 +317,7 @@ class Gateway extends \WC_Payment_Gateway {
 	public function validate_fields() {
 		$owner = isset( $_POST['paytr_cc_owner'] ) ? sanitize_text_field( wp_unslash( $_POST['paytr_cc_owner'] ) ) : '';
 		$num   = isset( $_POST['paytr_card_number'] ) ? preg_replace( '/\D/', '', wp_unslash( $_POST['paytr_card_number'] ) ) : '';
-		$month = isset( $_POST['paytr_expiry_month'] ) ? preg_replace( '/\D/', '', wp_unslash( $_POST['paytr_expiry_month'] ) ) : '';
-		$year  = isset( $_POST['paytr_expiry_year'] ) ? preg_replace( '/\D/', '', wp_unslash( $_POST['paytr_expiry_year'] ) ) : '';
+		list( $month, $year ) = $this->expiry_month_year();
 		$cvv   = isset( $_POST['paytr_cvv'] ) ? preg_replace( '/\D/', '', wp_unslash( $_POST['paytr_cvv'] ) ) : '';
 
 		if ( ! $owner || strlen( $num ) < 15 || strlen( $num ) > 19 || ! $month || strlen( $year ) !== 2 || strlen( $cvv ) < 3 ) {
@@ -310,11 +339,12 @@ class Gateway extends \WC_Payment_Gateway {
 			return array( 'result' => 'failure' );
 		}
 
+		list( $exp_month, $exp_year ) = $this->expiry_month_year();
 		$card = array(
 			'owner' => isset( $_POST['paytr_cc_owner'] ) ? sanitize_text_field( wp_unslash( $_POST['paytr_cc_owner'] ) ) : '',
 			'number'=> isset( $_POST['paytr_card_number'] ) ? wp_unslash( $_POST['paytr_card_number'] ) : '',
-			'month' => isset( $_POST['paytr_expiry_month'] ) ? wp_unslash( $_POST['paytr_expiry_month'] ) : '',
-			'year'  => isset( $_POST['paytr_expiry_year'] ) ? wp_unslash( $_POST['paytr_expiry_year'] ) : '',
+			'month' => $exp_month,
+			'year'  => $exp_year,
 			'cvv'   => isset( $_POST['paytr_cvv'] ) ? wp_unslash( $_POST['paytr_cvv'] ) : '',
 			'brand' => isset( $_POST['paytr_card_brand'] ) ? sanitize_key( wp_unslash( $_POST['paytr_card_brand'] ) ) : '',
 		);
@@ -350,8 +380,18 @@ class Gateway extends \WC_Payment_Gateway {
 			}
 		}
 
+		// "Ödemesi bekleyen"/"Başarısız" bir siparişte müşteri "Öde"ye
+		// tıklayınca gelinen order-pay sayfasında WooCommerce bu gizli alanı
+		// ekler (bkz. WC çekirdek şablonu templates/checkout/form-pay.php).
+		// O sayfa checkout'tan farklı bir form/AJAX ucu (#order_review,
+		// checkout_order_pay) kullandığından inline JS'imiz orada çalışmaz;
+		// bu yüzden 3D Secure'ü tam sayfa yönlendirmeyle gösteriyoruz.
+		$is_pay_page = ! empty( $_POST['woocommerce_pay'] ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
+
 		$ok_url   = $order->get_checkout_order_received_url();
-		$fail_url = add_query_arg( array( 'paytr_failed' => $order_id ), wc_get_checkout_url() );
+		$fail_url = $is_pay_page
+			? $order->get_checkout_payment_url()
+			: add_query_arg( array( 'paytr_failed' => $order_id ), wc_get_checkout_url() );
 
 		$result = $api->charge( $order, $card, $installment, \WC_Geolocation::get_ip_address(), $ok_url, $fail_url );
 
@@ -371,6 +411,20 @@ class Gateway extends \WC_Payment_Gateway {
 		$order->save();
 
 		set_transient( 'paytr_3ds_' . $order_id . '_' . $order->get_order_key(), $result['html'], 15 * MINUTE_IN_SECONDS );
+
+		if ( $is_pay_page ) {
+			return array(
+				'result'   => 'success',
+				'redirect' => add_query_arg(
+					array(
+						'wc-api'   => 'paytr_inline_3ds_page',
+						'order_id' => $order_id,
+						'key'      => $order->get_order_key(),
+					),
+					home_url( '/' )
+				),
+			);
+		}
 
 		return array(
 			'result'   => 'success',

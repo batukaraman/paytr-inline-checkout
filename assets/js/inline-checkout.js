@@ -264,6 +264,7 @@
 			var $wrap = $( '<div/>' ).html( messages );
 			removeNotices();
 			$( 'form.checkout' ).prepend( $wrap );
+			this.reenablePlaceOrderButtons();
 			$( document.body ).trigger( 'checkout_error', [ messages ] );
 		},
 
@@ -275,6 +276,7 @@
 			html += '</ul>';
 			removeNotices();
 			$( 'form.checkout' ).prepend( html );
+			this.reenablePlaceOrderButtons();
 			$( document.body ).trigger( 'checkout_error', [ html ] );
 		},
 
@@ -378,6 +380,7 @@
 			this.paying = false;
 			this.unblock( $( 'form.checkout' ) );
 			this.renderNotice( [ msg || CFG.i18n.generic ] );
+			this.reenablePlaceOrderButtons();
 			this.scrollToTop();
 		},
 
@@ -391,12 +394,30 @@
 			}
 		},
 
+		/* Temanın sabit "Sipariş Ver" proxy butonu (navigation.js), tıklandığı
+		   anda kendini disabled=true yapıp yalnızca "checkout_error" jQuery
+		   olayıyla tekrar açılıyor. O olay bazı durumlarda temaya ulaşmadığı
+		   için (ör. olay üretici ile dinleyici arasında zamanlama/yeniden
+		   render farkı) butonu burada DOĞRUDAN da açıyoruz — olay tetiklemeye
+		   ek bir güvence, tema tarafındaki mekanizmanın yerine geçmiyor. */
+		reenablePlaceOrderButtons: function () {
+			var proxyBtn = document.getElementById( 'checkout-sidebar-place-order' );
+			if ( proxyBtn ) {
+				proxyBtn.disabled = false;
+			}
+			var barBtn = document.getElementById( 'sfc-checkout-bar-submit' );
+			if ( barBtn ) {
+				barBtn.disabled = false;
+			}
+		},
+
 		/* Kullanıcı × ile modalı kendi isteğiyle kapatırsa da aynı temizliği
 		   yapıyoruz ki "Sipariş Ver" tekrar denenebilir kalsın. */
 		close3ds: function () {
 			this.closeModalOnly();
 			this.paying = false;
 			this.unblock( $( 'form.checkout' ) );
+			this.reenablePlaceOrderButtons();
 			$( document.body ).trigger( 'checkout_error' );
 		},
 

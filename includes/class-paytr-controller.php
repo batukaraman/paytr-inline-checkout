@@ -41,8 +41,9 @@ class Controller {
 		// PayTR Mağaza Paneli -> Bildirim URL: /?wc-api=paytr_inline_notify
 		add_action( 'woocommerce_api_paytr_inline_notify', array( $this, 'handle_notify' ) );
 
-		// "Siparişlerim"de yarım kalan denemelerin Öde/İptal aksiyonlarını gizle.
-		add_filter( 'woocommerce_my_account_my_orders_actions', array( $this, 'hide_stub_actions' ), 10, 2 );
+		// "Ödemesi bekleyen" sipariş sayfasında (order-pay) inline/iframe akışı
+		// çalışmadığı için 3D Secure'ü tam sayfa olarak gösteren uç.
+		add_action( 'woocommerce_api_paytr_inline_3ds_page', array( $this, 'render_3ds_fullpage' ) );
 
 		add_action( 'init', array( $this, 'maybe_schedule_gc' ) );
 		add_action( 'paytr_inline_gc', array( $this, 'run_gc' ) );
@@ -87,7 +88,7 @@ class Controller {
 		if ( ! function_exists( 'is_checkout' ) || ! is_checkout() ) {
 			return;
 		}
-		if ( is_wc_endpoint_url( 'order-received' ) || is_wc_endpoint_url( 'order-pay' ) ) {
+		if ( is_wc_endpoint_url( 'order-received' ) ) {
 			return;
 		}
 
@@ -97,6 +98,15 @@ class Controller {
 			array(),
 			PAYTR_INLINE_VER
 		);
+
+		// order-pay sayfası ayrı bir form/AJAX ucu kullanır (#order_review,
+		// checkout_order_pay) ve 3D Secure'ü tam sayfa yönlendirmeyle
+		// gösterir (bkz. render_3ds_fullpage) — bu yüzden inline JS'i (BIN
+		// sorgulama, iframe/AJAX akışı) orada YÜKLEMİYORUZ; kart alanları
+		// düz HTML form olarak, CSS'le birlikte, JS'siz de çalışır.
+		if ( is_wc_endpoint_url( 'order-pay' ) ) {
+			return;
+		}
 
 		wp_enqueue_script(
 			'paytr-inline-checkout',
@@ -417,11 +427,33 @@ class Controller {
 	/*  Yardımcılar                                                       */
 	/* ------------------------------------------------------------------ */
 
-	public function hide_stub_actions( $actions, $order ) {
-		if ( 'yes' === $order->get_meta( '_paytr_inline_pending' ) && $order->has_status( array( 'pending', 'failed' ) ) ) {
-			unset( $actions['pay'], $actions['cancel'] );
+	/**
+	 * "Ödemesi bekleyen"/"Başarısız" bir siparişte müşteri "Öde"ye tıklayınca
+	 * gelinen order-pay sayfasında process_payment() tam sayfa 3D Secure
+	 * yönlendirmesi üretir (bkz. Gateway::process_payment). Bu uç, o
+	 * yönlendirmenin hedefidir: PayTR'nin ürettiği 3D Secure HTML'ini WP
+	 * şablonuna sarmadan olduğu gibi basar; merchant_ok_url/fail_url zaten
+	 * tam sayfa yönlendirmeyle akışı doğal olarak tamamlar.
+	 */
+	public function render_3ds_fullpage() {
+		$order_id = isset( $_GET['order_id'] ) ? absint( $_GET['order_id'] ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		$key      = isset( $_GET['key'] ) ? sanitize_text_field( wp_unslash( $_GET['key'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		$order    = $order_id ? wc_get_order( $order_id ) : false;
+
+		if ( ! $order || ! hash_equals( $order->get_order_key(), $key ) ) {
+			wp_die( esc_html__( 'Sipariş doğrulanamadı.', 'paytr-inline-checkout' ) );
 		}
-		return $actions;
+
+		$tkey = 'paytr_3ds_' . $order_id . '_' . $key;
+		$html = get_transient( $tkey );
+		if ( ! $html ) {
+			wp_safe_redirect( $order->get_checkout_payment_url() );
+			exit;
+		}
+		delete_transient( $tkey );
+
+		echo $html; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+		exit;
 	}
 
 	public function maybe_schedule_gc() {
