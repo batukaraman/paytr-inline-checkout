@@ -8,6 +8,7 @@
 	var App = {
 		lastBin: '',
 		selectedInstallment: 0,
+		pendingSelection: 0,
 		paying: false,
 		pollTimer: null,
 		pollDeadline: 0,
@@ -36,6 +37,19 @@
 			$( document ).on( 'click', '.paytr-inline-installment-row', this.onSelectInstallment.bind( this ) );
 			$( document ).on( 'click', '.paytr-inline-3ds-close', this.close3ds.bind( this ) );
 			$( document ).on( 'click', '#paytr-inline-showall', this.onToggleAllRates.bind( this ) );
+
+			// checkout sayfasında sepet toplamı DEĞİŞEBİLECEK her olaydan
+			// (side-cart-panel'den miktar değiştirme, adres/kargo yöntemi
+			// değişimi, kupon ekleme/kaldırma) sonra WooCommerce her zaman
+			// "updated_checkout" olayını tetikler. Bu olay #payment kutusunun
+			// HTML'ini genelde YENİDEN BASMAZ (jQuery, sunucudan dönen HTML
+			// bir önceki ile birebir aynıysa — ki payment_fields() çıktısı
+			// fiyattan bağımsızdır — DOM'a hiç dokunmaz), bu yüzden BİZİM
+			// JS'in kendi bastığı taksit tutarları eski toplamla ekranda
+			// kalmaya devam ederdi. O yüzden bu olayı burada dinleyip, kart
+			// numarası zaten girilmişse taksit listesini taze toplamla
+			// yeniden hesaplatıyoruz (bkz. refreshInstallmentsForNewTotal()).
+			$( document.body ).on( 'updated_checkout', this.refreshInstallmentsForNewTotal.bind( this ) );
 		},
 
 		$mount: function () {
@@ -74,6 +88,21 @@
 			if ( digits.length >= ( isAmex ? 15 : 16 ) ) {
 				focusNext( '#paytr_expiry' );
 			}
+		},
+
+		/* checkout sayfasında sepet toplamını değiştirebilecek herhangi bir
+		   olaydan (bkz. start()'taki 'updated_checkout' bağlaması) sonra,
+		   kart numarası zaten girilip taksit listesi bir kez oluşturulmuşsa,
+		   aynı BIN için tutarları taze sepet toplamıyla yeniden çeker. Kart
+		   alanı henüz boşsa (lastBin boş) yapacak bir şey yok. */
+		refreshInstallmentsForNewTotal: function () {
+			if ( ! this.lastBin ) {
+				return;
+			}
+			var bin = this.lastBin;
+			this.pendingSelection = this.selectedInstallment;
+			this.lastBin = ''; // maybeLookupBin'in "bin değişmedi" kısayolunu atlat.
+			this.maybeLookupBin( bin );
 		},
 
 		maybeLookupBin: function ( bin ) {
@@ -122,7 +151,21 @@
 			} );
 
 			$wrap.html( html );
-			this.selectedInstallment = 0;
+
+			// refreshInstallmentsForNewTotal() bir toplam değişikliğinden sonra
+			// buraya geldiyse, kullanıcının önceden seçtiği taksit sayısını
+			// (varsa yeni listede hâlâ mevcutsa) koru — sepetini güncelleyen
+			// bir müşterinin taksit seçimi sıfırlanıp "Tek Çekim"e dönmemeli.
+			var restore = this.pendingSelection || 0;
+			this.pendingSelection = 0;
+			var $restoreRow = restore ? $wrap.find( '.paytr-inline-installment-row[data-count="' + restore + '"]' ) : $();
+			if ( restore && $restoreRow.length ) {
+				$wrap.find( '.paytr-inline-installment-row' ).removeClass( 'is-selected' );
+				$restoreRow.addClass( 'is-selected' );
+				this.selectedInstallment = restore;
+			} else {
+				this.selectedInstallment = 0;
+			}
 			this.syncInstallmentField();
 		},
 
