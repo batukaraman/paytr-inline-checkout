@@ -303,6 +303,31 @@ class Gateway extends \WC_Payment_Gateway {
 	}
 
 	/**
+	 * Kartın gerçek marka/bankasını PayTR'nin BIN servisinden, kartın
+	 * GERÇEK numarasının ilk haneleriyle sunucu tarafında tespit eder.
+	 * Bilerek $_POST['paytr_card_brand'] (client'ın BIN önizlemesi
+	 * sırasında doldurduğu, tamamen UI amaçlı bir alan) KULLANILMAZ —
+	 * vade farkı hesaplaması buna güvenirse client onu manipüle ederek
+	 * gerçek fiyatın altında taksitli ödeme yapabilirdi (bkz. process_payment()).
+	 *
+	 * @param Api    $api
+	 * @param string $card_number Kartın (henüz bellekten silinmemiş) numarası.
+	 * @return string Küçük harfli marka anahtarı; tespit edilemezse ''.
+	 */
+	protected function detect_brand_server_side( Api $api, $card_number ) {
+		$digits = preg_replace( '/\D/', '', (string) $card_number );
+		if ( strlen( $digits ) < 6 ) {
+			return '';
+		}
+		$bin    = substr( $digits, 0, strlen( $digits ) >= 8 ? 8 : 6 );
+		$detail = $api->bin_detail( $bin );
+		if ( is_wp_error( $detail ) || empty( $detail['status'] ) || 'success' !== $detail['status'] || empty( $detail['brand'] ) ) {
+			return '';
+		}
+		return strtolower( (string) $detail['brand'] );
+	}
+
+	/**
 	 * Kart doğrulaması PayTR'nin kendi yanıtında (3D/ret) yapılır; burada
 	 * yalnızca alanların dolu olup olmadığına bakılır ki boş kart isteği
 	 * PayTR'ye hiç gitmesin.
@@ -339,7 +364,13 @@ class Gateway extends \WC_Payment_Gateway {
 			'month' => $exp_month,
 			'year'  => $exp_year,
 			'cvv'   => isset( $_POST['paytr_cvv'] ) ? wp_unslash( $_POST['paytr_cvv'] ) : '',
-			'brand' => isset( $_POST['paytr_card_brand'] ) ? sanitize_key( wp_unslash( $_POST['paytr_card_brand'] ) ) : '',
+			// GÜVENLİK: marka ASLA $_POST'tan (paytr_card_brand) okunmaz. O
+			// alan yalnızca client'ın BIN önizlemesi sırasında doldurduğu,
+			// UI amaçlı bir ipucudur — client bunu boşaltıp/değiştirip aşağıdaki
+			// vade farkı hesaplamasını atlatabilirdi. Gerçek marka birazdan
+			// kartın KENDİ hanelerinden sunucu tarafında tekrar tespit edilir
+			// (bkz. detect_brand_server_side()).
+			'brand' => '',
 		);
 		$installment = isset( $_POST['paytr_installment'] ) ? (int) $_POST['paytr_installment'] : 0;
 
@@ -347,15 +378,31 @@ class Gateway extends \WC_Payment_Gateway {
 
 		$api = new Api( $this->api_settings() );
 
+		$card['brand'] = $this->detect_brand_server_side( $api, $card['number'] );
+
 		// PayTR Direkt API'de komisyonu PayTR eklemez; "peşin fiyatına taksit"
 		// mantığıyla vade farkını tutara EKLEYİP göndermek üye işyerinin
 		// sorumluluğudur (bkz. PayTR desteğinin doğruladığı formül). Seçilen
 		// taksit sayısı için vade farkını hesaplayıp siparişe ücret olarak
 		// ekliyoruz ki hem müşteri gerçek tutarı görsün hem de PayTR'ye
 		// gönderilen tutar (order->get_total()) doğru olsun.
-		if ( $installment >= 2 && $card['brand'] ) {
-			$rates = $api->installment_rates();
-			$pct   = ! is_wp_error( $rates ) ? (float) ( $rates['oranlar'][ $card['brand'] ][ $installment ] ?? 0 ) : 0;
+		//
+		// GÜVENLİK: taksit sayısı seçiliyken sunucu tarafında tespit edilen
+		// GERÇEK marka için PayTR'nin oran tablosunda tanımlı bir oran
+		// bulunamazsa (marka tespit edilemedi ya da bu marka için bu taksit
+		// sayısı yok) ödemeyi vade farksız devam ettirip sessizce indirim
+		// vermek yerine REDDEDİYORUZ.
+		if ( $installment >= 2 ) {
+			$rates        = $api->installment_rates();
+			$rate_defined = ! is_wp_error( $rates ) && $card['brand']
+				&& isset( $rates['oranlar'][ $card['brand'] ][ $installment ] );
+
+			if ( ! $rate_defined ) {
+				wc_add_notice( __( 'Seçilen taksit seçeneği bu kart için doğrulanamadı. Lütfen tekrar deneyin veya tek çekim ile ödeyin.', 'paytr-inline-checkout' ), 'error' );
+				return array( 'result' => 'failure' );
+			}
+
+			$pct = (float) $rates['oranlar'][ $card['brand'] ][ $installment ];
 			if ( $pct > 0 ) {
 				$base  = (float) $order->get_total();
 				$gross = Api::gross_up( $base, $pct );

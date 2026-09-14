@@ -259,22 +259,29 @@ class Controller {
 	}
 
 	/**
-	 * Basit IP başına hız sınırlama — BIN/taksit sorgulama uçları PayTR'nin
-	 * kendi servislerini çağırdığı için (önbelleklenmemiş ilk istekler)
-	 * kötüye kullanımla (BIN enumeration, servis şişirme) PayTR'ye yük
-	 * bindirilmesini engeller. 20 istek / 10 saniye, IP+uç başına.
+	 * Basit sabit-pencere hız sınırlama. Varsayılanlar (20 istek / 10 saniye,
+	 * IP başına) BIN/taksit sorgulama uçları için: PayTR'nin kendi
+	 * servislerini çağırdıklarından (önbelleklenmemiş ilk istekler) kötüye
+	 * kullanımla (BIN enumeration, servis şişirme) PayTR'ye yük
+	 * bindirilmesini engeller. Gerçek kart tahsilat denemesi yapan
+	 * ajax_pay_order() daha sıkı özel limitlerle ayrıca çağırır (bkz. orada).
 	 *
-	 * @param string $bucket
+	 * @param string      $bucket
+	 * @param int         $limit
+	 * @param int         $window Saniye.
+	 * @param string|null $identifier Varsayılan: istemci IP'si.
 	 * @return bool true ise istek reddedilmeli.
 	 */
-	protected function rate_limited( $bucket ) {
-		$ip  = \WC_Geolocation::get_ip_address();
-		$key = 'paytr_inline_rl_' . $bucket . '_' . md5( $ip );
+	protected function rate_limited( $bucket, $limit = 20, $window = 10, $identifier = null ) {
+		if ( null === $identifier ) {
+			$identifier = \WC_Geolocation::get_ip_address();
+		}
+		$key = 'paytr_inline_rl_' . $bucket . '_' . md5( $identifier );
 		$hit = (int) get_transient( $key );
-		if ( $hit >= 20 ) {
+		if ( $hit >= $limit ) {
 			return true;
 		}
-		set_transient( $key, $hit + 1, 10 );
+		set_transient( $key, $hit + 1, $window );
 		return false;
 	}
 
@@ -333,15 +340,28 @@ class Controller {
 		check_ajax_referer( 'paytr_inline', 'nonce' );
 
 		$order_id = isset( $_POST['order_id'] ) ? absint( $_POST['order_id'] ) : 0;
-		$key      = isset( $_POST['order_key'] ) ? sanitize_text_field( wp_unslash( $_POST['order_key'] ) ) : '';
-		$order    = $order_id ? wc_get_order( $order_id ) : false;
+
+		// Kart tahsilat denemesi yapan tek uç burası — kart testi/carding
+		// saldırılarına karşı iki ayrı sınır uyguluyoruz: tek bir IP'nin
+		// FARKLI siparişlerde art arda kart denemesi ("bin/all_rates" ile
+		// aynı IP başına genel limit) ve tek bir siparişin (ör. çalınmış bir
+		// order_key ile, farklı IP'lerden bile olsa) art arda denenmesi.
+		if ( $this->rate_limited( 'pay_ip', 10, 60 ) ) {
+			wp_send_json( $this->pay_error( __( 'Çok fazla ödeme denemesi yapıldı. Lütfen birkaç dakika sonra tekrar deneyin.', 'paytr-inline-checkout' ) ) );
+		}
+		if ( $order_id && $this->rate_limited( 'pay_order', 5, 60, 'order_' . $order_id ) ) {
+			wp_send_json( $this->pay_error( __( 'Çok fazla ödeme denemesi yapıldı. Lütfen birkaç dakika sonra tekrar deneyin.', 'paytr-inline-checkout' ) ) );
+		}
+
+		$key   = isset( $_POST['order_key'] ) ? sanitize_text_field( wp_unslash( $_POST['order_key'] ) ) : '';
+		$order = $order_id ? wc_get_order( $order_id ) : false;
 
 		if ( ! $order || ! hash_equals( $order->get_order_key(), $key ) ) {
-			wp_send_json( array( 'result' => 'failure', 'messages' => '<ul class="woocommerce-error"><li>' . esc_html__( 'Sipariş doğrulanamadı.', 'paytr-inline-checkout' ) . '</li></ul>' ) );
+			wp_send_json( $this->pay_error( __( 'Sipariş doğrulanamadı.', 'paytr-inline-checkout' ) ) );
 		}
 
 		if ( ! current_user_can( 'pay_for_order', $order_id ) ) {
-			wp_send_json( array( 'result' => 'failure', 'messages' => '<ul class="woocommerce-error"><li>' . esc_html__( 'Ödeme formuna devam etmek için lütfen hesabınıza giriş yapınız.', 'paytr-inline-checkout' ) . '</li></ul>' ) );
+			wp_send_json( $this->pay_error( __( 'Ödeme formuna devam etmek için lütfen hesabınıza giriş yapınız.', 'paytr-inline-checkout' ) ) );
 		}
 
 		if ( ! $order->needs_payment() ) {
@@ -351,12 +371,37 @@ class Controller {
 			) );
 		}
 
+		// Bu noktadan sonrası WC_Form_Handler::pay_action() ile aynı
+		// davranışı taklit eder (bkz. o metodun kaynak kodu): sipariş+anahtar
+		// doğrulanıp ödeme gerektiği kesinleştiğinde 'woocommerce_before_pay_action'
+		// tetiklenir — WooCommerce Subscriptions/Deposits gibi bazı eklentiler
+		// order-pay akışının çalıştığını bu hook'tan anlar. Bunu atlarsak
+		// order-pay'i AJAX'a taşımamız o eklentilerle sessizce uyumsuz kalırdı.
+		do_action( 'woocommerce_before_pay_action', $order );
+
+		WC()->customer->set_props( array(
+			'billing_country'  => $order->get_billing_country() ? $order->get_billing_country() : null,
+			'billing_state'    => $order->get_billing_state() ? $order->get_billing_state() : null,
+			'billing_postcode' => $order->get_billing_postcode() ? $order->get_billing_postcode() : null,
+			'billing_city'     => $order->get_billing_city() ? $order->get_billing_city() : null,
+		) );
+		WC()->customer->save();
+
+		// checkout/terms.php şartlar/koşullar kutusunu zorunlu kılıyorsa
+		// (mağaza ayarına bağlı) çekirdek pay_action() de aynı kontrolü
+		// yapar — bu uç atlarsa order-pay üzerinden şartlar onayı hiç
+		// zorunlu olmazdı.
+		if ( ! empty( $_POST['terms-field'] ) && empty( $_POST['terms'] ) ) {
+			wp_send_json( $this->pay_error( __( 'Sipariş ile devam etmek için lütfen şartları ve koşulları okuyup kabul edin.', 'paytr-inline-checkout' ) ) );
+		}
+
 		$payment_method_id  = isset( $_POST['payment_method'] ) ? wc_clean( wp_unslash( $_POST['payment_method'] ) ) : '';
 		$available_gateways = WC()->payment_gateways()->get_available_payment_gateways();
 		$gateway            = isset( $available_gateways[ $payment_method_id ] ) ? $available_gateways[ $payment_method_id ] : null;
 
 		if ( ! $gateway ) {
-			wp_send_json( array( 'result' => 'failure', 'messages' => '<ul class="woocommerce-error"><li>' . esc_html__( 'Geçersiz ödeme yöntemi.', 'paytr-inline-checkout' ) . '</li></ul>' ) );
+			do_action( 'woocommerce_after_pay_action', $order );
+			wp_send_json( $this->pay_error( __( 'Geçersiz ödeme yöntemi.', 'paytr-inline-checkout' ) ) );
 		}
 
 		$order->set_payment_method( $gateway );
@@ -365,6 +410,7 @@ class Controller {
 		$gateway->validate_fields();
 
 		if ( wc_notice_count( 'error' ) > 0 ) {
+			do_action( 'woocommerce_after_pay_action', $order );
 			wp_send_json( array(
 				'result'   => 'failure',
 				'messages' => wc_print_notices( true ),
@@ -374,13 +420,33 @@ class Controller {
 		$result = $gateway->process_payment( $order_id );
 
 		if ( ! isset( $result['result'] ) || 'success' !== $result['result'] ) {
+			do_action( 'woocommerce_after_pay_action', $order );
 			wp_send_json( array(
 				'result'   => 'failure',
 				'messages' => wc_print_notices( true ),
 			) );
 		}
 
+		// 'woocommerce_after_pay_action' başarılı sonuçta ÇALIŞTIRILMAZ —
+		// çekirdeğin kendi pay_action()'ı da başarı durumunda hemen
+		// wp_redirect()+exit ile döndüğü için bu hook'a hiç ulaşmaz; burada
+		// da aynı sıra korunuyor (bkz. yukarıdaki yorum).
+		$result['order_id'] = $order_id;
+
 		wp_send_json( apply_filters( 'woocommerce_payment_successful_result', $result, $order_id ) );
+	}
+
+	/**
+	 * order-pay AJAX'ının tekrar eden "woocommerce-error" sarmalayıcısı.
+	 *
+	 * @param string $message
+	 * @return array
+	 */
+	protected function pay_error( $message ) {
+		return array(
+			'result'   => 'failure',
+			'messages' => '<ul class="woocommerce-error"><li>' . esc_html( $message ) . '</li></ul>',
+		);
 	}
 
 	/* ------------------------------------------------------------------ */
@@ -452,22 +518,14 @@ class Controller {
 			exit;
 		}
 
-		$oid   = (string) ( $post['merchant_oid'] ?? '' );
-		$order = $this->find_order_by_oid( $oid );
-
-		if ( $order && $this->is_stale_notification( $order, $oid ) ) {
-			// Müşteri bir siparişi birden fazla kez denediğinde, ÖNCEKİ
-			// (iptal edilmiş/reddedilmiş) bir denemeye ait geç gelen bir
-			// bildirim, o sırada devam eden YENİ bir denemenin sonucunu
-			// yanlışlıkla geçersiz kılabilir. Hash geçerli (gerçekten
-			// PayTR'den) ama bu artık güncel deneme değil — yok sayıyoruz.
-			error_log( 'PayTR Inline: eski (güncel olmayan) deneme bildirimi yok sayıldı, oid=' . $oid ); // phpcs:ignore
-			echo 'OK';
-			exit;
-		}
+		$oid    = (string) ( $post['merchant_oid'] ?? '' );
+		$order  = $this->find_order_by_oid( $oid );
+		$status = (string) ( $post['status'] ?? '' );
 
 		if ( $order ) {
-			if ( 'success' === ( $post['status'] ?? '' ) ) {
+			$is_stale = $this->is_stale_notification( $order, $oid );
+
+			if ( 'success' === $status ) {
 				if ( ! $order->has_status( array( 'processing', 'completed' ) ) ) {
 					if ( $this->notify_amount_mismatch( $order, $post ) ) {
 						// Hash geçerli (bildirim gerçekten PayTR'den) ama tutar sipariş
@@ -477,12 +535,36 @@ class Controller {
 						$order->update_status( 'on-hold', __( 'PayTR: bildirimdeki tutar sipariş toplamıyla uyuşmuyor, manuel inceleme gerekiyor.', 'paytr-inline-checkout' ) );
 						error_log( 'PayTR Inline: tutar uyuşmazlığı, oid=' . $post['merchant_oid'] ); // phpcs:ignore
 					} else {
+						// ÖNEMLİ: "eski" (güncel olmayan) bir denemeye ait olsa
+						// BİLE bir "success" bildirimi asla sessizce atılmaz.
+						// Hash geçerli demek PayTR'de gerçekten tahsilat yapıldığı
+						// anlamına gelir; müşteri bu denemeden SONRA yeni bir
+						// deneme başlatmış olsa dahi parayı görmezden gelip
+						// siparişi ödenmemiş bırakmak ("tahsil edildi ama sipariş
+						// hiç tamamlanmadı" durumu) burada atlanan riskten çok
+						// daha kötüdür. Bunun yerine ödemeyi işleyip, olası çift
+						// tahsilat ihtimaline karşı manuel incelemeye işaret
+						// düşüyoruz.
 						$order->payment_complete( sanitize_text_field( $post['merchant_oid'] ) );
-						$order->add_order_note( __( 'PayTR: ödeme onaylandı (bildirim).', 'paytr-inline-checkout' ) );
+						if ( $is_stale ) {
+							$order->add_order_note( __( 'PayTR: ödeme onaylandı (bildirim). UYARI: bu bildirim, müşterinin bu siparişte SONRADAN yeni bir deneme başlatmasından SONRA geldi (eski deneme). Olası çift tahsilat ihtimaline karşı PayTR Mağaza Panelinden bu siparişin tüm denemelerini kontrol edin.', 'paytr-inline-checkout' ) );
+							error_log( 'PayTR Inline: eski bir denemenin GEÇ gelen BAŞARI bildirimi işlendi (çift tahsilat ihtimali kontrol edilmeli), oid=' . $oid ); // phpcs:ignore
+						} else {
+							$order->add_order_note( __( 'PayTR: ödeme onaylandı (bildirim).', 'paytr-inline-checkout' ) );
+						}
 					}
 				}
 				$order->delete_meta_data( '_paytr_inline_pending' );
 				$order->save();
+			} elseif ( $is_stale ) {
+				// Müşteri bir siparişi birden fazla kez denediğinde, ÖNCEKİ
+				// (iptal edilmiş/reddedilmiş) bir denemeye ait geç gelen bir
+				// RET/hata bildirimi, o sırada devam eden YENİ bir denemeyi
+				// yanlışlıkla "failed"e düşürebilir. Bu yalnızca başarısız
+				// bildirimler için güvenli şekilde yok sayılabilir — bir
+				// "success" bildirimi için bu dal hiç çalışmaz (yukarıda ele
+				// alınır), yani gerçek bir tahsilat asla bu şekilde atılmaz.
+				error_log( 'PayTR Inline: eski (güncel olmayan) RET bildirimi yok sayıldı, oid=' . $oid ); // phpcs:ignore
 			} else {
 				if ( ! $order->has_status( array( 'processing', 'completed' ) ) ) {
 					$reason = sanitize_text_field( $post['failed_reason_msg'] ?? '' );
