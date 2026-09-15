@@ -137,7 +137,14 @@ class Api {
 			'user_name'          => substr( trim( $order->get_billing_first_name() . ' ' . $order->get_billing_last_name() ), 0, 60 ),
 			'user_address'       => substr( trim( $order->get_billing_address_1() . ' ' . $order->get_billing_address_2() . ' ' . $order->get_billing_city() ), 0, 400 ) ?: 'Belirtilmedi',
 			'user_phone'         => substr( (string) $order->get_billing_phone(), 0, 20 ) ?: '05000000000',
-			'user_basket'        => base64_encode( wp_json_encode( $basket ) ),
+			// PayTR'nin resmi PHP örneği ("dev.paytr.com/direkt-api/direkt-api-1-adim")
+			// user_basket için htmlentities(json_encode(...)) kullanıyor — base64
+			// DEĞİL. base64 ile gönderilen bir sepet ödemenin kendisini
+			// engellemiyor (payment_token hash'i user_basket'i içermiyor), ama
+			// PayTR'nin sipariş içeriğini insan-okunur şekilde ayrıştırıp
+			// göstermesini/doğrulamasını engelliyor — "canlıya geçiş" sihirbazının
+			// sürekli "sipariş içeriği hatalı/boş" demesinin sebebi buydu.
+			'user_basket'        => htmlentities( wp_json_encode( $basket ), ENT_QUOTES, 'UTF-8' ),
 			'debug_on'           => ! empty( $this->settings['debug_on'] ) && 'yes' === $this->settings['debug_on'] ? '1' : '0',
 			'client_lang'        => 'tr',
 			'cc_owner'           => substr( (string) $card['owner'], 0, 50 ),
