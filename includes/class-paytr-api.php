@@ -100,6 +100,21 @@ class Api {
 				1,
 			);
 		}
+		// Kargo/teslimat ücreti de basket toplamına dahil edilmezse, basket
+		// toplamı payment_amount'tan (kargo dahil) düşük kalır. PayTR canlıya
+		// geçiş kontrolü tam olarak bunu tespit edip "sipariş içeriği hatalı"
+		// diye işaretliyor: basket toplamı ile tahsil edilen tutar uyuşmalı.
+		foreach ( $order->get_items( 'shipping' ) as $shipping_item ) {
+			$shipping_total = (float) $shipping_item->get_total();
+			if ( $shipping_total <= 0 ) {
+				continue;
+			}
+			$basket[] = array(
+				wp_strip_all_tags( $shipping_item->get_name() ?: __( 'Kargo', 'paytr-inline-checkout' ) ),
+				number_format( $shipping_total, 2, '.', '' ),
+				1,
+			);
+		}
 		if ( ! $basket ) {
 			$basket[] = array( 'Sipariş #' . $order->get_id(), number_format( (float) $order->get_total(), 2, '.', '' ), 1 );
 		}
